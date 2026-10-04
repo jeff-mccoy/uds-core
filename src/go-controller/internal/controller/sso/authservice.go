@@ -256,7 +256,12 @@ func buildDefaultAuthserviceConfig(domain string) *AuthserviceConfig {
 			IdleSessionTimeout:     "0",
 			Scopes:                 []string{},
 		},
-		Chains: []AuthserviceChain{},
+		// Core's original bootstrap contract uses an inactive localhost chain.
+		// Authservice validates a nonempty chain set even when unmatched requests
+		// are denied. This does not create any identity client or access grant.
+		Chains: []AuthserviceChain{buildChain(udstypes.Sso{}, Client{
+			ClientID: "placeholder", Secret: "placeholder", RedirectUris: []string{"https://localhost/login"},
+		}, domain)},
 	}
 }
 
@@ -284,6 +289,11 @@ func getAuthserviceConfig(ctx context.Context, coreClient corev1client.CoreV1Int
 
 // updateAuthserviceConfig writes the config back to the secret and returns whether the content changed.
 func updateAuthserviceConfig(ctx context.Context, coreClient corev1client.CoreV1Interface, cfg *AuthserviceConfig) (bool, error) {
+	// Preserve the valid inactive contract after the last real chain is removed,
+	// and repair empty configurations produced by earlier Go checkpoints.
+	if len(cfg.Chains) == 0 {
+		cfg.Chains = buildDefaultAuthserviceConfig(config.Get().Domain).Chains
+	}
 	data, err := json.Marshal(cfg)
 	if err != nil {
 		return false, fmt.Errorf("marshal authservice config: %w", err)

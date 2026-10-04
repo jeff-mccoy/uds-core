@@ -61,8 +61,8 @@ func TestAuthserviceNamespaceCreationBootstrapsRealConfigAndRetriesDeployment(t 
 	if err := json.Unmarshal(secret.Data["config.json"], &config); err != nil {
 		t.Fatal(err)
 	}
-	if config.AllowUnmatched || len(config.Chains) != 0 || config.DefaultOIDC == nil || config.DefaultOIDC.SkipVerifyPeerCert {
-		t.Fatal("bootstrap altered the supported fail-closed empty/default configuration")
+	if config.AllowUnmatched || len(config.Chains) != 1 || config.Chains[0].Name != "placeholder" || config.Chains[0].Match.Prefix != "localhost" || config.DefaultOIDC == nil || config.DefaultOIDC.SkipVerifyPeerCert {
+		t.Fatal("bootstrap altered the original inactive localhost/default configuration")
 	}
 	if ctrl.queue.NumRequeues("config") != 1 {
 		t.Fatal("missing real Deployment did not retry after Secret convergence")
