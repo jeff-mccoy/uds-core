@@ -7,6 +7,7 @@
     "signatureIssuer": "https://token.actions.githubusercontent.com"
   },
   "go": "go1.27.1",
+  "zarfDockerAPIVersion": "1.45",
   "distroless": "gcr.io/distroless/static-debian13@sha256:e2e927ec666bae08560abb3c55d0659eceabb657f56b6782ab500a9fc7f555e3",
   "identity": {
     "bridgeImage": "ark-core-native-identity:20261004-id10",

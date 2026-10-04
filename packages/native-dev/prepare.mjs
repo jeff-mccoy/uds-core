@@ -10,6 +10,7 @@ import { verifyPackage } from './verify-package.mjs';
 import { validateRender } from './validate-render.mjs';
 import { verifyControllerReuse, verifyLocalController } from './reuse-controller.mjs';
 import { controllerImageTag, frozenControllerTag } from './image-tag.mjs';
+import { zarfDockerEnvironment } from './zarf-docker-api.mjs';
 
 const root=path.resolve(import.meta.dirname,'../..');
 const pkg=import.meta.dirname;
@@ -46,6 +47,7 @@ const sourceSHA=sha(JSON.stringify(Object.entries(sourceFiles).sort(([a],[b])=>a
 const lock={...inputs,architecture:arch,sourceGitHEAD:commit,sourceSHA256:sourceSHA,sourceFiles,removedImportActions:[],createdAt:null};
 lock.tenantActivationEnabled=!baseOnly&&!args.includes('--candidate');
 lock.connectedOnly=connected;
+lock.zarfCreateEnvironment={DOCKER_API_VERSION:inputs.zarfDockerAPIVersion};
 const signed=verifySignedInputs({inputs,out,run,uds,directory:option('--signed-input-dir',process.env.NATIVE_SIGNED_INPUT_DIR),required:args.includes('--package'),baseOnly});
 lock.signedInputVerification={status:signed.status,packages:signed.packages};
 lock.derivedPackageUnsigned=true;
@@ -172,7 +174,7 @@ if(sha(JSON.stringify(Object.entries(sourceHashes()).sort(([a],[b])=>a.localeCom
 fs.writeFileSync(path.join(out,'build-lock.json'),JSON.stringify(lock,null,2)+'\n');
 let packageReceipt;
 if(args.includes('--package')){
- run(uds,lock.zarfCreateArguments,{stdio:'inherit'});
+ run(uds,lock.zarfCreateArguments,{stdio:'inherit',env:zarfDockerEnvironment(inputs.zarfDockerAPIVersion,process.env)});
  const archive=path.join(pkg,'build',`zarf-package-${main.metadata.name}-${arch}-${main.metadata.version}-upstream.tar.zst`);
  packageReceipt=verifyPackage({archive,lock,expectedImages:parsed.components.flatMap(c=>c.images||[]),out,run});
  const imageArchive=path.join(pkg,'build',`${main.metadata.name}-${arch}-images.tar`);

@@ -24,13 +24,22 @@ func mutationBootstrap(identity bool) error {
 		return err
 	}
 	for _, obj := range objects {
-		if err := apply(obj); err != nil {
+		if err := applyMutationBootstrap(obj); err != nil {
 			return err
 		}
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 	return waitMutationCanary(ctx, time.Second)
+}
+
+func applyMutationBootstrap(obj map[string]interface{}) error {
+	// The pinned Zarf Helm installer uses the "zarf" SSA manager. Seed the
+	// exact same objects under that manager so API-defaulted atomic fields can
+	// be handed to the active chart without a second manager conflict.
+	// Do not force ownership away from an unrelated administrator.
+	_, err := kube(obj, "apply", "--server-side", "--field-manager=zarf", "-f", "-")
+	return err
 }
 
 func mutationObjects(data []byte) ([]map[string]interface{}, error) {

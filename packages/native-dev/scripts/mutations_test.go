@@ -117,3 +117,28 @@ func TestCancelledMutationGateDoesNotCreateAnotherCanary(t *testing.T) {
 		t.Fatalf("cancellation lost: %v", err)
 	}
 }
+
+func TestMutationBootstrapUsesPinnedHelmOwnershipWithoutForce(t *testing.T) {
+	objects := sourceMutations(t)
+	calls := 0
+	fakeKube(t, func(input interface{}, args ...string) ([]byte, error) {
+		calls++
+		if strings.Join(args, " ") != "apply --server-side --field-manager=zarf -f -" {
+			t.Fatalf("bootstrap cannot safely hand API-defaulted ownership to Helm: %v", args)
+		}
+		// Compare JSON to prove the helper changes ownership transport without
+		// changing enforcement content.
+		got, _ := json.Marshal(input)
+		want, _ := json.Marshal(objects[0])
+		if string(got) != string(want) {
+			t.Fatal("bootstrap changed canonical policy content")
+		}
+		return []byte("applied"), nil
+	})
+	if err := applyMutationBootstrap(objects[0]); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 1 {
+		t.Fatal("unexpected extra authority requests")
+	}
+}
