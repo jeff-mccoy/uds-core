@@ -35,3 +35,17 @@ The two main-suite adaptations select the actual native operator's log labels an
 Live observation found an unconditional five-minute recovery timer invalidating all 33 Package epochs. Full serialized reconciliation of unchanged resources delayed foreground work. C7 adds clean periodic checks and scoped observation of actual gateway, ownership, namespace and shared-configuration drift. It must pass integrated race, full Core, bounded update, fresh installation and isolated guest checks before routine use.
 
 Keep failed attempts in the evidence. A successful dedicated test does not turn a failed full-suite setup into a pass. Rendered charts, low idle RSS and Ready Pods do not establish tenant access, guest capacity or complete policy parity.
+
+## Current integrated result
+
+The actual C8/id10/Dexid4 main run passes all 24 files: 142 assertions pass, no assertion or setup fails, and the existing source procMount skip remains. The test configuration is unchanged; the two documented adaptations remain explicit. Final native admission passes all 136 checks with independent restoration. The full unchanged development browser passes all 21 without a retry or skip while ten real Go-derived client updates persist and produce audit records inside the exact browser window. Each update keeps the fixed 20-second deadline; the maximum convergence is 8.6 seconds.
+
+The actual periodic event checks 34 Packages without invalidating clean recovery epochs. The subsequent foreground updates complete in 2.7–12.4 seconds. Four real drift repairs complete in 3.8–8.2 seconds, and fixture deletion is verified by recorded resource identity. These measurements include their stated boundaries; the tiny cached workflow duration is not the end-to-end API or queue duration.
+
+## Private gateway boundary
+
+The connected development package selects `ClusterIP` for both original Istio gateways. The stock comparison control uses the same override. The admin and tenant gateways remain distinct and retain their real routes, TLS and authorization behavior. This choice qualifies a private inner-cluster profile; it does not qualify production LoadBalancer provisioning.
+
+Hosted access requires an authenticated outer broker bound to the accepted owner, generation, attempt and physical guest. That broker and Ark's hosted UDS control are not implemented or qualified by this Core fork. The owned test harness can relay to private gateway endpoints and verify real Host/SNI, TLS, redirects, signed identity and app responses, but it is not evidence that an Ark assignment transaction exists. Do not expose private API credentials or infer public readiness from a Ready Gateway Pod.
+
+Cold installation, actual private tenant access, matched native performance, final isolated guest capacity and warm assignment remain completion gates. Preserve the earlier unused-volume, empty-chain, field-manager and missing-load-balancer failures separately from repaired results.

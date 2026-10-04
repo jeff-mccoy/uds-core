@@ -2,6 +2,18 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later OR LicenseRef-Defense-Unicorns-Commercial
 import yaml from 'js-yaml';
 
+export function privateGatewayServices(objects) {
+  const gateways=['admin','tenant'].map(role=>{
+    const service=objects.find(o=>o?.kind==='Service'&&o.metadata?.namespace===`istio-${role}-gateway`&&o.metadata?.name===`${role}-ingressgateway`);
+    if(!service||service.spec.type!=='ClusterIP')throw new Error(`Private ${role} gateway must render as its own ClusterIP Service`);
+    const ports=new Set(service.spec.ports.map(p=>p.port));
+    if(!ports.has(80)||!ports.has(443)||!Object.keys(service.spec.selector||{}).length)throw new Error('Private gateway lost its real HTTP/TLS listener or workload selector');
+    return {role,name:service.metadata.name,namespace:service.metadata.namespace,type:service.spec.type,ports:[...ports].sort((a,b)=>a-b),selector:service.spec.selector};
+  });
+  if(JSON.stringify(gateways[0].selector)===JSON.stringify(gateways[1].selector))throw new Error('Admin and tenant gateway workload roles were combined');
+  return gateways;
+}
+
 export function validateRender(source,identityIncluded) {
   // Original gateway templates repeat the app/istio labels. Match the Helm
   // YAML-to-JSON conversion while preserving the original signed chart bytes.
@@ -19,6 +31,7 @@ export function validateRender(source,identityIncluded) {
   const bindings=objects.filter(o=>o.kind.endsWith('AdmissionPolicyBinding')&&o.metadata.name.startsWith('uds-native-'));
   if(bindings.length!==28)throw new Error('Wrong native activation binding counts');
   let identityPasswordOnly=false;
+  let privateGateways=[];
   const secret=objects.find(o=>o.kind==='Secret'&&o.metadata.name==='uds-native-identity-config');
   if(identityIncluded){
     if(!secret)throw new Error('Native development identity configuration missing');
@@ -30,6 +43,7 @@ export function validateRender(source,identityIncluded) {
     const namespaces=dex.map(c=>c.env.find(e=>e.name==='KUBERNETES_POD_NAMESPACE')?.value);
     if(dex.length!==2||namespaces.some(n=>!n)||new Set(namespaces).size!==2)throw new Error('Public and admin Dex storage authority was combined');
     identityPasswordOnly=true;
+    privateGateways=privateGatewayServices(objects);
   }else if(secret||runtime.some(o=>['keycloak','authservice','istio-admin-gateway','istio-tenant-gateway'].includes(o.namespace)))throw new Error('Identity or public gateways leaked into fenced native base');
-  return {objects:objects.length,runtime,controllerPhases:controllers.length,completeCallbackRegistrations:configs.length,completeCallbackEntries:callbacks,nativeBindingsByName:Object.fromEntries([...new Set(bindings.map(o=>o.metadata.name))].map(name=>[name,bindings.filter(o=>o.metadata.name===name).length])),identityPasswordOnly,yamlDuplicateHandling:'Inherited original gateway labels use Helm JSON last-value behavior; signed source templates preserved'};
+  return {objects:objects.length,runtime,controllerPhases:controllers.length,completeCallbackRegistrations:configs.length,completeCallbackEntries:callbacks,nativeBindingsByName:Object.fromEntries([...new Set(bindings.map(o=>o.metadata.name))].map(name=>[name,bindings.filter(o=>o.metadata.name===name).length])),identityPasswordOnly,privateGateways,yamlDuplicateHandling:'Inherited original gateway labels use Helm JSON last-value behavior; signed source templates preserved'};
 }

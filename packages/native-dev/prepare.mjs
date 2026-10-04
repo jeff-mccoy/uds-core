@@ -86,6 +86,9 @@ control.actions.onDeploy.after=originalActions.filter(a=>!removedNames.includes(
 control.actions.onDeploy.after.push({description:'Require CNI, ztunnel and Istiod before native ambient controller',maxTotalSeconds:300,cmd:'set -eu\n./zarf tools kubectl -n istio-system rollout status daemonset/istio-cni-node --timeout=120s\n./zarf tools kubectl -n istio-system rollout status daemonset/ztunnel --timeout=120s\n./zarf tools kubectl -n istio-system rollout status deployment/istiod --timeout=120s\n'});
 const gateways=istio.components.filter(c=>['istio-admin-gateway','istio-tenant-gateway'].includes(c.name));
 if(signed.status==='verified')for(const gateway of gateways)retainSignedRemoteCharts(gateway,signed.charts);
+const gatewayPrivateValues=path.join(pkg,'values/gateway-private.yaml');
+lock.privateGatewayOverlay={profile:'private-development-guest',serviceType:'ClusterIP',valuesPath:'packages/native-dev/values/gateway-private.yaml',sha256:sha(fs.readFileSync(gatewayPrivateValues)),components:gateways.map(c=>c.name),accessBoundary:'Hosted access requires a separate UID-bound authenticated outer broker, not implemented by this recipe; explicit owned test relays can qualify inner TLS/SSO only; LoadBalancer provisioning is not qualified',comparison:'Original stock control uses the same ClusterIP gateway values'};
+for(const gateway of gateways){const chart=gateway.charts.find(c=>c.name==='gateway');if(!chart)throw new Error('Original gateway chart missing');chart.valuesFiles.push(gatewayPrivateValues);}
 overlay('istio',istio,[control,...gateways],path.join(root,'src/istio'));
 const identity=composed('src/keycloak');
 const provider=identity.components.find(c=>c.name==='keycloak');if(!provider)throw new Error('Original Keycloak component missing');
