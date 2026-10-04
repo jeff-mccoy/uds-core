@@ -11,6 +11,8 @@ ignore:
   - "**/node_modules/**"
   - "dist/**"
   - "build/**"
+  - "packages/native-dev/.build/**"
+  - "src/go-controller/.generated/**"
   - "src/pepr/uds-operator-config/templates/**"
   - "src/pepr/uds-exemptions/templates/**"
   - ".codespellrc"

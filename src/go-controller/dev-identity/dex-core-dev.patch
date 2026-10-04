@@ -1,0 +1,830 @@
+diff --git a/cmd/dex/config.go b/cmd/dex/config.go
+index 8861dde..349367f 100644
+--- a/cmd/dex/config.go
++++ b/cmd/dex/config.go
+@@ -34,7 +34,8 @@ type Config struct {
+ 	Expiry    Expiry    `json:"expiry"`
+ 	Logger    Logger    `json:"logger"`
+ 
+-	Frontend server.WebConfig `json:"frontend"`
++	Frontend            server.WebConfig                  `json:"frontend"`
++	DevelopmentIdentity *server.DevelopmentIdentityConfig `json:"developmentIdentity,omitempty"`
+ 
+ 	// Signer configuration controls signing of JWT tokens issued by Dex.
+ 	Signer Signer `json:"signer"`
+diff --git a/cmd/dex/serve.go b/cmd/dex/serve.go
+index 54d150a..0b6ae93 100644
+--- a/cmd/dex/serve.go
++++ b/cmd/dex/serve.go
+@@ -356,6 +356,7 @@ func runServe(options serveOptions) error {
+ 		SkipApprovalScreen:         c.OAuth2.SkipApprovalScreen,
+ 		AlwaysShowLoginScreen:      c.OAuth2.AlwaysShowLoginScreen,
+ 		PasswordConnector:          c.OAuth2.PasswordConnector,
++		DevelopmentIdentity:        c.DevelopmentIdentity,
+ 		Headers:                    c.Web.Headers.ToHTTPHeader(),
+ 		AllowedOrigins:             c.Web.AllowedOrigins,
+ 		AllowedHeaders:             c.Web.AllowedHeaders,
+@@ -616,6 +617,9 @@ func applyConfigOverrides(options serveOptions, config *Config) {
+ 			"urn:ietf:params:oauth:grant-type:device_code",
+ 			"urn:ietf:params:oauth:grant-type:token-exchange",
+ 		}
++		if config.DevelopmentIdentity != nil {
++			config.OAuth2.GrantTypes = append(config.OAuth2.GrantTypes, "client_credentials")
++		}
+ 	}
+ }
+ 
+diff --git a/connector/authproxy/authproxy.go b/connector/authproxy/authproxy.go
+index 3fe451b..7f9b37a 100644
+--- a/connector/authproxy/authproxy.go
++++ b/connector/authproxy/authproxy.go
+@@ -4,10 +4,12 @@
+ package authproxy
+ 
+ import (
++	"encoding/json"
+ 	"fmt"
+ 	"log/slog"
+ 	"net/http"
+ 	"net/url"
++	"strconv"
+ 	"strings"
+ 
+ 	"github.com/dexidp/dex/connector"
+@@ -19,13 +21,17 @@ import (
+ // Headers retrieved to fetch user's email and group can be configured
+ // with userHeader and groupHeader.
+ type Config struct {
+-	UserIDHeader         string   `json:"userIDHeader"`
+-	UserHeader           string   `json:"userHeader"`
+-	UserNameHeader       string   `json:"userNameHeader"`
+-	EmailHeader          string   `json:"emailHeader"`
+-	GroupHeader          string   `json:"groupHeader"`
+-	GroupHeaderSeparator string   `json:"groupHeaderSeparator"`
+-	Groups               []string `json:"staticGroups"`
++	Refresh              *RefreshConfig `json:"refresh,omitempty"`
++	UserIDHeader         string         `json:"userIDHeader"`
++	UserHeader           string         `json:"userHeader"`
++	UserNameHeader       string         `json:"userNameHeader"`
++	EmailHeader          string         `json:"emailHeader"`
++	EmailVerifiedHeader  string         `json:"emailVerifiedHeader,omitempty"`
++	SessionVersionHeader string         `json:"sessionVersionHeader,omitempty"`
++	GroupHeader          string         `json:"groupHeader"`
++	GroupHeaderSeparator string         `json:"groupHeaderSeparator"`
++	GroupHeaderEncoding  string         `json:"groupHeaderEncoding,omitempty"`
++	Groups               []string       `json:"staticGroups"`
+ }
+ 
+ // Open returns an authentication strategy which requires no user interaction.
+@@ -55,17 +61,24 @@ func (c *Config) Open(id string, logger *slog.Logger) (connector.Connector, erro
+ 		groupHeaderSeparator = ","
+ 	}
+ 
+-	return &callback{
++	connector := &callback{
+ 		userIDHeader:         userIDHeader,
+ 		userHeader:           userHeader,
+ 		userNameHeader:       userNameHeader,
+ 		emailHeader:          emailHeader,
++		emailVerifiedHeader:  c.EmailVerifiedHeader,
++		sessionVersionHeader: c.SessionVersionHeader,
+ 		groupHeader:          groupHeader,
+ 		groupHeaderSeparator: groupHeaderSeparator,
++		groupHeaderEncoding:  c.GroupHeaderEncoding,
+ 		groups:               c.Groups,
+ 		logger:               logger.With(slog.Group("connector", "type", "authproxy", "id", id)),
+ 		pathSuffix:           "/" + id,
+-	}, nil
++	}
++	if c.Refresh != nil {
++		return newRefreshCallback(connector, *c.Refresh)
++	}
++	return connector, nil
+ }
+ 
+ // Callback is a connector which returns an identity with the HTTP header
+@@ -75,8 +88,11 @@ type callback struct {
+ 	userNameHeader       string
+ 	userHeader           string
+ 	emailHeader          string
++	emailVerifiedHeader  string
++	sessionVersionHeader string
+ 	groupHeader          string
+ 	groupHeaderSeparator string
++	groupHeaderEncoding  string
+ 	groups               []string
+ 	logger               *slog.Logger
+ 	pathSuffix           string
+@@ -113,12 +129,37 @@ func (m *callback) HandleCallback(s connector.Scopes, _ []byte, r *http.Request)
+ 	if remoteUserEmail == "" {
+ 		remoteUserEmail = remoteUser
+ 	}
++	emailVerified := true
++	if m.emailVerifiedHeader != "" {
++		var err error
++		emailVerified, err = strconv.ParseBool(r.Header.Get(m.emailVerifiedHeader))
++		if err != nil {
++			return connector.Identity{}, fmt.Errorf("invalid verified email header")
++		}
++	}
++	var connectorData []byte
++	if m.sessionVersionHeader != "" {
++		version, err := strconv.ParseUint(r.Header.Get(m.sessionVersionHeader), 10, 64)
++		if err != nil {
++			return connector.Identity{}, fmt.Errorf("invalid identity session version")
++		}
++		connectorData, _ = json.Marshal(struct {
++			Version uint64 `json:"version"`
++		}{version})
++	}
+ 	groups := m.groups
+ 	headerGroup := r.Header.Get(m.groupHeader)
+ 	if headerGroup != "" {
+-		splitheaderGroup := strings.Split(headerGroup, m.groupHeaderSeparator)
+-		for i, v := range splitheaderGroup {
+-			splitheaderGroup[i] = strings.TrimSpace(v)
++		splitheaderGroup := []string{}
++		if m.groupHeaderEncoding == "json" {
++			if err := json.Unmarshal([]byte(headerGroup), &splitheaderGroup); err != nil {
++				return connector.Identity{}, fmt.Errorf("invalid identity group header")
++			}
++		} else {
++			splitheaderGroup = strings.Split(headerGroup, m.groupHeaderSeparator)
++			for i, v := range splitheaderGroup {
++				splitheaderGroup[i] = strings.TrimSpace(v)
++			}
+ 		}
+ 		groups = append(splitheaderGroup, groups...)
+ 	}
+@@ -127,7 +168,8 @@ func (m *callback) HandleCallback(s connector.Scopes, _ []byte, r *http.Request)
+ 		Username:          remoteUser,
+ 		PreferredUsername: remoteUserName,
+ 		Email:             remoteUserEmail,
+-		EmailVerified:     true,
++		EmailVerified:     emailVerified,
+ 		Groups:            groups,
++		ConnectorData:     connectorData,
+ 	}, nil
+ }
+diff --git a/server/handlers.go b/server/handlers.go
+index 62f1650..98910a6 100644
+--- a/server/handlers.go
++++ b/server/handlers.go
+@@ -879,6 +879,8 @@ func (s *Server) handleToken(w http.ResponseWriter, r *http.Request) {
+ 		return
+ 	}
+ 	switch grantType {
++	case "client_credentials":
++		s.withClientFromStorage(w, r, s.handleDevelopmentClientCredentials)
+ 	case grantTypeDeviceCode:
+ 		s.handleDeviceToken(w, r)
+ 	case grantTypeAuthorizationCode:
+diff --git a/server/oauth2.go b/server/oauth2.go
+index 5821f0f..bf3f232 100644
+--- a/server/oauth2.go
++++ b/server/oauth2.go
+@@ -313,6 +313,9 @@ func genSubject(userID string, connID string) (string, error) {
+ }
+ 
+ func (s *Server) newIDToken(ctx context.Context, clientID string, claims storage.Claims, scopes []string, nonce, accessToken, code, connID string) (idToken string, expiry time.Time, err error) {
++	if err := s.authorizeDevelopmentUser(ctx, clientID, claims.UserID, connID); err != nil {
++		return "", time.Time{}, err
++	}
+ 	issuedAt := s.now()
+ 	expiry = issuedAt.Add(s.idTokensValidFor)
+ 
+@@ -473,8 +476,7 @@ func (s *Server) parseAuthorizationRequest(r *http.Request) (*storage.AuthReques
+ 	}
+ 
+ 	if codeChallengeMethod != codeChallengeMethodS256 && codeChallengeMethod != codeChallengeMethodPlain {
+-		description := fmt.Sprintf("Unsupported PKCE challenge method (%q).", codeChallengeMethod)
+-		return nil, newRedirectedErr(errInvalidRequest, description)
++		return nil, newRedirectedErr(errInvalidRequest, "Unsupported PKCE challenge method (%q).", codeChallengeMethod)
+ 	}
+ 
+ 	var (
+@@ -557,8 +559,7 @@ func (s *Server) parseAuthorizationRequest(r *http.Request) (*storage.AuthReques
+ 	}
+ 	if rt.token {
+ 		if redirectURI == redirectURIOOB {
+-			err := fmt.Sprintf("Cannot use response type 'token' with redirect_uri '%s'.", redirectURIOOB)
+-			return nil, newRedirectedErr(errInvalidRequest, err)
++			return nil, newRedirectedErr(errInvalidRequest, "Cannot use response type 'token' with redirect_uri '%s'.", redirectURIOOB)
+ 		}
+ 	}
+ 
+diff --git a/server/server.go b/server/server.go
+index e923e3e..88008b8 100644
+--- a/server/server.go
++++ b/server/server.go
+@@ -106,6 +106,10 @@ type Config struct {
+ 	// If set, the server will use this connector to handle password grants
+ 	PasswordConnector string
+ 
++	// DevelopmentIdentity enables Core's opt-in, mTLS-backed service-account
++	// grant. OIDC claims and signatures remain owned by Dex.
++	DevelopmentIdentity *DevelopmentIdentityConfig
++
+ 	GCFrequency time.Duration // Defaults to 5 minutes
+ 
+ 	// If specified, the server will use this function for determining time.
+@@ -187,7 +191,8 @@ type Server struct {
+ 	alwaysShowLogin bool
+ 
+ 	// Used for password grant
+-	passwordConnector string
++	passwordConnector   string
++	developmentIdentity *developmentIdentity
+ 
+ 	supportedResponseTypes map[string]bool
+ 
+@@ -253,6 +258,9 @@ func newServer(ctx context.Context, c Config) (*Server, error) {
+ 	if c.PasswordConnector != "" {
+ 		allSupportedGrants[grantTypePassword] = true
+ 	}
++	if c.DevelopmentIdentity != nil {
++		allSupportedGrants["client_credentials"] = true
++	}
+ 
+ 	var supportedGrants []string
+ 	if len(c.AllowedGrantTypes) > 0 {
+@@ -312,6 +320,12 @@ func newServer(ctx context.Context, c Config) (*Server, error) {
+ 		logger:                 c.Logger,
+ 		signer:                 c.Signer,
+ 	}
++	if c.DevelopmentIdentity != nil {
++		s.developmentIdentity, err = newDevelopmentIdentity(*c.DevelopmentIdentity)
++		if err != nil {
++			return nil, fmt.Errorf("development identity authority: %w", err)
++		}
++	}
+ 
+ 	// Retrieves connector objects in backend storage. This list includes the static connectors
+ 	// defined in the ConfigMap and dynamic connectors retrieved from the storage.
+diff --git a/storage/kubernetes/storage.go b/storage/kubernetes/storage.go
+index 028ced7..ce47c28 100644
+--- a/storage/kubernetes/storage.go
++++ b/storage/kubernetes/storage.go
+@@ -2,6 +2,7 @@ package kubernetes
+ 
+ import (
+ 	"context"
++	"encoding/json"
+ 	"errors"
+ 	"fmt"
+ 	"log/slog"
+@@ -388,7 +389,34 @@ func (cli *client) GetConnector(ctx context.Context, id string) (storage.Connect
+ }
+ 
+ func (cli *client) ListClients(ctx context.Context) ([]storage.Client, error) {
+-	return nil, errors.New("not implemented")
++	endpoint, err := cli.urlFor(cli.apiVersion, cli.namespace, resourceClient, "")
++	if err != nil {
++		return nil, err
++	}
++	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
++	if err != nil {
++		return nil, err
++	}
++	response, err := cli.client.Do(request)
++	if err != nil {
++		return nil, err
++	}
++	defer closeResp(response)
++	if err := checkHTTPErr(response, http.StatusOK); err != nil {
++		return nil, err
++	}
++	var listed ClientList
++	if err := json.NewDecoder(response.Body).Decode(&listed); err != nil {
++		return nil, err
++	}
++	clients := make([]storage.Client, 0, len(listed.Clients))
++	for _, client := range listed.Clients {
++		if err := ctx.Err(); err != nil {
++			return nil, err
++		}
++		clients = append(clients, toStorageClient(client))
++	}
++	return clients, nil
+ }
+ 
+ func (cli *client) ListRefreshTokens(ctx context.Context) ([]storage.RefreshToken, error) {
+diff --git a/Dockerfile.core-dev b/Dockerfile.core-dev
+new file mode 100644
+index 0000000..75dc2f4
+--- /dev/null
++++ b/Dockerfile.core-dev
+@@ -0,0 +1,8 @@
++# Copyright 2026 The Dex Authors
++# SPDX-License-Identifier: Apache-2.0
++
++FROM gcr.io/distroless/static-debian13@sha256:e2e927ec666bae08560abb3c55d0659eceabb657f56b6782ab500a9fc7f555e3
++COPY --chmod=0755 dex-dev /usr/local/bin/dex-dev
++COPY web /srv/dex/web
++USER 65532:65532
++ENTRYPOINT ["/usr/local/bin/dex-dev"]
+diff --git a/connector/authproxy/core_identity_test.go b/connector/authproxy/core_identity_test.go
+new file mode 100644
+index 0000000..3922578
+--- /dev/null
++++ b/connector/authproxy/core_identity_test.go
+@@ -0,0 +1,41 @@
++// Copyright 2026 The Dex Authors
++// SPDX-License-Identifier: Apache-2.0
++
++package authproxy
++
++import (
++	"log/slog"
++	"net/http/httptest"
++	"reflect"
++	"testing"
++
++	"github.com/dexidp/dex/connector"
++)
++
++func TestCoreClaimsRetainLiteralGroupsAndVerifiedEmailAuthority(t *testing.T) {
++	configuration := Config{GroupHeaderEncoding: "json", EmailVerifiedHeader: "X-Remote-Email-Verified"}
++	opened, err := configuration.Open("uds", slog.Default())
++	if err != nil {
++		t.Fatal(err)
++	}
++	callback := opened.(connector.CallbackConnector)
++	request := httptest.NewRequest("GET", "https://identity.example.test/callback/uds", nil)
++	request.Header.Set("X-Remote-User", "actual-user")
++	request.Header.Set("X-Remote-User-Id", "actual-user-id")
++	request.Header.Set("X-Remote-User-Email", "user@example.test")
++	request.Header.Set("X-Remote-Email-Verified", "false")
++	request.Header.Set("X-Remote-Group", `["/literal, /UDS Core/Admin"]`)
++	identity, err := callback.HandleCallback(connector.Scopes{}, nil, request)
++	if err != nil || identity.EmailVerified || !reflect.DeepEqual(identity.Groups, []string{"/literal, /UDS Core/Admin"}) {
++		t.Fatal("directory claim authority changed", identity, err)
++	}
++	request.Header.Set("X-Remote-Group", `invalid JSON`)
++	if _, err := callback.HandleCallback(connector.Scopes{}, nil, request); err == nil {
++		t.Fatal("invalid group state accepted")
++	}
++	request.Header.Set("X-Remote-Group", `[]`)
++	request.Header.Del("X-Remote-Email-Verified")
++	if _, err := callback.HandleCallback(connector.Scopes{}, nil, request); err == nil {
++		t.Fatal("unknown email verification accepted")
++	}
++}
+diff --git a/connector/authproxy/refresh.go b/connector/authproxy/refresh.go
+new file mode 100644
+index 0000000..20a2209
+--- /dev/null
++++ b/connector/authproxy/refresh.go
+@@ -0,0 +1,99 @@
++// Copyright 2026 The Dex Authors
++// SPDX-License-Identifier: Apache-2.0
++
++package authproxy
++
++import (
++	"context"
++	"crypto/tls"
++	"crypto/x509"
++	"encoding/json"
++	"fmt"
++	"github.com/dexidp/dex/connector"
++	"io"
++	"net/http"
++	"net/url"
++	"os"
++	"time"
++)
++
++// Refresh is opt-in. Existing authproxy deployments keep their original
++// callback-only behavior. Core's private identity lookup requires mutual TLS
++// and refreshes group membership instead of trusting stale callback claims.
++type RefreshConfig struct {
++	Endpoint   string `json:"endpoint"`
++	RootCA     string `json:"rootCA"`
++	ClientCert string `json:"clientCert"`
++	ClientKey  string `json:"clientKey"`
++}
++
++type refreshCallback struct {
++	*callback
++	endpoint *url.URL
++	client   *http.Client
++}
++
++func newRefreshCallback(base *callback, cfg RefreshConfig) (connector.Connector, error) {
++	endpoint, err := url.Parse(cfg.Endpoint)
++	if err != nil || endpoint.Scheme != "https" || endpoint.Host == "" {
++		return nil, fmt.Errorf("authproxy refresh requires HTTPS endpoint")
++	}
++	roots := x509.NewCertPool()
++	raw, err := os.ReadFile(cfg.RootCA)
++	if err != nil || !roots.AppendCertsFromPEM(raw) {
++		return nil, fmt.Errorf("invalid authproxy refresh root CA")
++	}
++	certificate, err := tls.LoadX509KeyPair(cfg.ClientCert, cfg.ClientKey)
++	if err != nil {
++		return nil, fmt.Errorf("authproxy refresh client certificate: %w", err)
++	}
++	transport := &http.Transport{TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12, RootCAs: roots, Certificates: []tls.Certificate{certificate}}}
++	return &refreshCallback{callback: base, endpoint: endpoint, client: &http.Client{Transport: transport, Timeout: 5 * time.Second}}, nil
++}
++
++func (c *refreshCallback) Refresh(ctx context.Context, scopes connector.Scopes, identity connector.Identity) (connector.Identity, error) {
++	endpoint := *c.endpoint
++	query := endpoint.Query()
++	query.Set("userId", identity.UserID)
++	endpoint.RawQuery = query.Encode()
++	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint.String(), nil)
++	if err != nil {
++		return connector.Identity{}, err
++	}
++	response, err := c.client.Do(request)
++	if err != nil {
++		return connector.Identity{}, err
++	}
++	defer response.Body.Close()
++	if response.StatusCode != http.StatusOK {
++		return connector.Identity{}, fmt.Errorf("authproxy identity refresh rejected: %d", response.StatusCode)
++	}
++	var user struct {
++		ID, Username, Email string
++		Groups              []string
++		EmailVerified       bool
++		SessionVersion      uint64
++	}
++	if err := json.NewDecoder(io.LimitReader(response.Body, 1<<20)).Decode(&user); err != nil {
++		return connector.Identity{}, err
++	}
++	if user.ID != identity.UserID || user.Username == "" || user.Email == "" {
++		return connector.Identity{}, fmt.Errorf("authproxy identity refresh mismatch")
++	}
++	if c.sessionVersionHeader != "" {
++		var data struct {
++			Version uint64 `json:"version"`
++		}
++		if json.Unmarshal(identity.ConnectorData, &data) != nil || data.Version != user.SessionVersion {
++			return connector.Identity{}, fmt.Errorf("authproxy credential/session authority revoked")
++		}
++	}
++	identity.Username = user.Username
++	identity.PreferredUsername = user.Username
++	identity.Email = user.Email
++	if c.emailVerifiedHeader != "" {
++		identity.EmailVerified = user.EmailVerified
++	}
++	identity.Groups = user.Groups
++	return identity, nil
++}
+diff --git a/server/development_identity.go b/server/development_identity.go
+new file mode 100644
+index 0000000..a25dfab
+--- /dev/null
++++ b/server/development_identity.go
+@@ -0,0 +1,134 @@
++// Copyright 2026 The Dex Authors
++// SPDX-License-Identifier: Apache-2.0
++
++package server
++
++import (
++	"context"
++	"crypto/tls"
++	"crypto/x509"
++	"encoding/json"
++	"fmt"
++	"io"
++	"net/http"
++	"net/url"
++	"os"
++	"time"
++
++	"github.com/dexidp/dex/storage"
++)
++
++// DevelopmentIdentityConfig is opt-in and requires a private HTTPS authority
++// with mutual TLS. It supplies managed service-account claims after Dex's
++// ordinary client-secret verification. The caller cannot select identity,
++// groups, or additional audiences.
++type DevelopmentIdentityConfig struct {
++	Endpoint                  string `json:"endpoint"`
++	RootCA                    string `json:"rootCA"`
++	ClientCert                string `json:"clientCert"`
++	ClientKey                 string `json:"clientKey"`
++	UserAuthorizationEndpoint string `json:"userAuthorizationEndpoint,omitempty"`
++}
++
++type developmentIdentity struct {
++	endpoint                  *url.URL
++	client                    *http.Client
++	userAuthorizationEndpoint *url.URL
++}
++
++func newDevelopmentIdentity(cfg DevelopmentIdentityConfig) (*developmentIdentity, error) {
++	endpoint, err := url.Parse(cfg.Endpoint)
++	if err != nil || endpoint.Scheme != "https" || endpoint.Host == "" {
++		return nil, fmt.Errorf("development identity requires HTTPS")
++	}
++	raw, err := os.ReadFile(cfg.RootCA)
++	if err != nil {
++		return nil, err
++	}
++	roots := x509.NewCertPool()
++	if !roots.AppendCertsFromPEM(raw) {
++		return nil, fmt.Errorf("invalid development identity trust root")
++	}
++	cert, err := tls.LoadX509KeyPair(cfg.ClientCert, cfg.ClientKey)
++	if err != nil {
++		return nil, err
++	}
++	transport := &http.Transport{TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12, RootCAs: roots, Certificates: []tls.Certificate{cert}}}
++	identity := &developmentIdentity{endpoint: endpoint, client: &http.Client{Transport: transport, Timeout: 5 * time.Second}}
++	if cfg.UserAuthorizationEndpoint != "" {
++		identity.userAuthorizationEndpoint, err = url.Parse(cfg.UserAuthorizationEndpoint)
++		if err != nil || identity.userAuthorizationEndpoint.Scheme != "https" || identity.userAuthorizationEndpoint.Host == "" {
++			return nil, fmt.Errorf("user authorization requires HTTPS")
++		}
++	}
++	return identity, nil
++}
++
++func (s *Server) authorizeDevelopmentUser(ctx context.Context, clientID, userID, connectorID string) error {
++	if s.developmentIdentity == nil || s.developmentIdentity.userAuthorizationEndpoint == nil || connectorID != "uds" {
++		return nil
++	}
++	endpoint := *s.developmentIdentity.userAuthorizationEndpoint
++	query := endpoint.Query()
++	query.Set("clientId", clientID)
++	query.Set("userId", userID)
++	endpoint.RawQuery = query.Encode()
++	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint.String(), nil)
++	if err != nil {
++		return err
++	}
++	response, err := s.developmentIdentity.client.Do(request)
++	if err != nil {
++		return err
++	}
++	defer response.Body.Close()
++	if response.StatusCode != 204 {
++		return fmt.Errorf("development user authorization rejected: %d", response.StatusCode)
++	}
++	return nil
++}
++
++func (s *Server) handleDevelopmentClientCredentials(writer http.ResponseWriter, request *http.Request, client storage.Client) {
++	if s.developmentIdentity == nil || client.Public {
++		s.tokenErrHelper(writer, errUnauthorizedClient, "service-account grant unavailable", 401)
++		return
++	}
++	endpoint := *s.developmentIdentity.endpoint
++	query := endpoint.Query()
++	query.Set("clientId", client.ID)
++	endpoint.RawQuery = query.Encode()
++	lookup, err := http.NewRequestWithContext(request.Context(), http.MethodGet, endpoint.String(), nil)
++	if err != nil {
++		s.tokenErrHelper(writer, errServerError, "identity lookup unavailable", 503)
++		return
++	}
++	response, err := s.developmentIdentity.client.Do(lookup)
++	if err != nil {
++		s.tokenErrHelper(writer, errServerError, "identity lookup unavailable", 503)
++		return
++	}
++	defer response.Body.Close()
++	if response.StatusCode != 200 {
++		s.tokenErrHelper(writer, errUnauthorizedClient, "service-account grant rejected", 401)
++		return
++	}
++	var identity struct {
++		ClientID, ID, Username string
++		Groups, Audiences      []string
++	}
++	if json.NewDecoder(io.LimitReader(response.Body, 1<<20)).Decode(&identity) != nil || identity.ClientID != client.ID || identity.ID == "" || identity.Username == "" {
++		s.tokenErrHelper(writer, errServerError, "invalid managed identity", 503)
++		return
++	}
++	scopes := []string{scopeProfile, scopeGroups}
++	for _, audience := range identity.Audiences {
++		scopes = append(scopes, "audience:server:client_id:"+audience)
++	}
++	claims := storage.Claims{UserID: identity.ID, Username: identity.Username, PreferredUsername: identity.Username, Groups: identity.Groups}
++	token, expiry, err := s.newAccessToken(request.Context(), client.ID, claims, scopes, "", "uds-service-account")
++	if err != nil {
++		s.tokenErrHelper(writer, errServerError, "could not issue service-account token", 503)
++		return
++	}
++	s.writeAccessToken(writer, &accessTokenResponse{AccessToken: token, TokenType: "bearer", ExpiresIn: int(expiry.Sub(s.now()).Seconds())})
++}
+diff --git a/server/development_identity_test.go b/server/development_identity_test.go
+new file mode 100644
+index 0000000..3011e56
+--- /dev/null
++++ b/server/development_identity_test.go
+@@ -0,0 +1,143 @@
++// Copyright 2026 The Dex Authors
++// SPDX-License-Identifier: Apache-2.0
++
++package server
++
++import (
++	"crypto/ecdsa"
++	"crypto/elliptic"
++	"crypto/rand"
++	"crypto/tls"
++	"crypto/x509"
++	"crypto/x509/pkix"
++	"encoding/json"
++	"encoding/pem"
++	"math/big"
++	"net"
++	"net/http"
++	"net/http/httptest"
++	"net/url"
++	"os"
++	"path/filepath"
++	"testing"
++	"time"
++
++	"github.com/coreos/go-oidc/v3/oidc"
++	"github.com/dexidp/dex/storage"
++	"github.com/stretchr/testify/require"
++)
++
++func developmentAuthority(t *testing.T, handler http.Handler) (*httptest.Server, DevelopmentIdentityConfig) {
++	t.Helper()
++	caKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
++	require.NoError(t, err)
++	ca := &x509.Certificate{SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "authority CA"}, NotBefore: time.Now().Add(-time.Minute), NotAfter: time.Now().Add(time.Hour), IsCA: true, BasicConstraintsValid: true, KeyUsage: x509.KeyUsageCertSign | x509.KeyUsageDigitalSignature}
++	caDER, err := x509.CreateCertificate(rand.Reader, ca, ca, &caKey.PublicKey, caKey)
++	require.NoError(t, err)
++	leaf := func(serial int64, client bool) ([]byte, []byte) {
++		key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
++		require.NoError(t, err)
++		usage := x509.ExtKeyUsageServerAuth
++		if client {
++			usage = x509.ExtKeyUsageClientAuth
++		}
++		cert := &x509.Certificate{SerialNumber: big.NewInt(serial), Subject: pkix.Name{CommonName: "authority"}, NotBefore: ca.NotBefore, NotAfter: ca.NotAfter, KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{usage}, IPAddresses: []net.IP{net.ParseIP("127.0.0.1")}}
++		der, err := x509.CreateCertificate(rand.Reader, cert, ca, &key.PublicKey, caKey)
++		require.NoError(t, err)
++		private, err := x509.MarshalPKCS8PrivateKey(key)
++		require.NoError(t, err)
++		return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: private})
++	}
++	serverCert, serverKey := leaf(2, false)
++	clientCert, clientKey := leaf(3, true)
++	pair, err := tls.X509KeyPair(serverCert, serverKey)
++	require.NoError(t, err)
++	roots := x509.NewCertPool()
++	roots.AppendCertsFromPEM(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: caDER}))
++	server := httptest.NewUnstartedServer(handler)
++	server.TLS = &tls.Config{MinVersion: tls.VersionTLS12, Certificates: []tls.Certificate{pair}, ClientAuth: tls.RequireAndVerifyClientCert, ClientCAs: roots}
++	server.StartTLS()
++	t.Cleanup(server.Close)
++	dir := t.TempDir()
++	files := map[string][]byte{"ca.pem": pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: caDER}), "client.pem": clientCert, "client.key": clientKey}
++	for name, raw := range files {
++		require.NoError(t, os.WriteFile(filepath.Join(dir, name), raw, 0600))
++	}
++	return server, DevelopmentIdentityConfig{Endpoint: server.URL + "/internal/service-identity", RootCA: filepath.Join(dir, "ca.pem"), ClientCert: filepath.Join(dir, "client.pem"), ClientKey: filepath.Join(dir, "client.key")}
++}
++
++func TestDevelopmentClientCredentialsUseVerifiedManagedIdentityAndDexSignatures(t *testing.T) {
++	enabled, identityClientID, lookups := true, "probe", 0
++	_, config := developmentAuthority(t, http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
++		lookups++
++		require.Equal(t, "probe", request.URL.Query().Get("clientId"))
++		require.NotEmpty(t, request.TLS.VerifiedChains)
++		if !enabled {
++			writer.WriteHeader(403)
++			return
++		}
++		json.NewEncoder(writer).Encode(map[string]any{"ClientID": identityClientID, "ID": "service-account-uuid", "Username": "service-account-probe", "Audiences": []string{"target"}, "Groups": []string{}})
++	}))
++	httpServer, server := newTestServer(t, func(cfg *Config) {
++		cfg.DevelopmentIdentity = &config
++		cfg.AllowedGrantTypes = append(cfg.AllowedGrantTypes, "client_credentials")
++	})
++	defer httpServer.Close()
++	require.NoError(t, server.storage.CreateClient(t.Context(), storage.Client{ID: "probe", Secret: "real-probe-secret"}))
++	require.NoError(t, server.storage.CreateClient(t.Context(), storage.Client{ID: "target", Secret: "target-secret", TrustedPeers: []string{"probe"}}))
++	request := func(secret string) *http.Response {
++		response, err := http.PostForm(httpServer.URL+"/token", url.Values{"grant_type": {"client_credentials"}, "client_id": {"probe"}, "client_secret": {secret}, "scope": {"audience:server:client_id:untrusted"}})
++		require.NoError(t, err)
++		return response
++	}
++	response := request("wrong-secret")
++	require.Equal(t, 401, response.StatusCode)
++	response.Body.Close()
++	require.Equal(t, 0, lookups)
++	response = request("real-probe-secret")
++	require.Equal(t, 200, response.StatusCode)
++	var tokens struct{ AccessToken, IDToken, RefreshToken string }
++	var raw map[string]json.RawMessage
++	require.NoError(t, json.NewDecoder(response.Body).Decode(&raw))
++	response.Body.Close()
++	require.NoError(t, json.Unmarshal(raw["access_token"], &tokens.AccessToken))
++	require.NotContains(t, raw, "id_token")
++	require.NotContains(t, raw, "refresh_token")
++	verifier := oidc.NewVerifier(httpServer.URL, oidc.NewRemoteKeySet(t.Context(), httpServer.URL+"/keys"), &oidc.Config{ClientID: "target"})
++	verified, err := verifier.Verify(t.Context(), tokens.AccessToken)
++	require.NoError(t, err)
++	require.ElementsMatch(t, []string{"probe", "target"}, verified.Audience)
++	var claims struct {
++		Name   string   `json:"name"`
++		Groups []string `json:"groups"`
++		AZP    string   `json:"azp"`
++	}
++	require.NoError(t, verified.Claims(&claims))
++	require.Equal(t, "service-account-probe", claims.Name)
++	require.Equal(t, "probe", claims.AZP)
++	require.Empty(t, claims.Groups)
++	enabled = false
++	response = request("real-probe-secret")
++	require.Equal(t, 401, response.StatusCode)
++	response.Body.Close()
++	enabled = true
++	identityClientID = "untrusted"
++	response = request("real-probe-secret")
++	require.Equal(t, 503, response.StatusCode)
++	response.Body.Close()
++}
++
++func TestDevelopmentAuthorityRequiresHTTPSAndMutualTLS(t *testing.T) {
++	_, err := newDevelopmentIdentity(DevelopmentIdentityConfig{Endpoint: "http://identity.internal"})
++	require.Error(t, err)
++	server, cfg := developmentAuthority(t, http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) { writer.WriteHeader(200) }))
++	client, err := newDevelopmentIdentity(cfg)
++	require.NoError(t, err)
++	transport := client.client.Transport.(*http.Transport).Clone()
++	transport.TLSClientConfig.Certificates = nil
++	response, err := (&http.Client{Transport: transport}).Get(server.URL)
++	if response != nil {
++		response.Body.Close()
++	}
++	require.Error(t, err)
++}
+diff --git a/storage/kubernetes/core_client_list_test.go b/storage/kubernetes/core_client_list_test.go
+new file mode 100644
+index 0000000..2baec6c
+--- /dev/null
++++ b/storage/kubernetes/core_client_list_test.go
+@@ -0,0 +1,58 @@
++// Copyright 2026 The Dex Authors
++// SPDX-License-Identifier: Apache-2.0
++
++package kubernetes
++
++import (
++	"context"
++	"encoding/json"
++	"net/http"
++	"net/http/httptest"
++	"testing"
++)
++
++func TestCoreClientListUsesActualNamespaceAndPreservesClientAuthority(t *testing.T) {
++	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
++		if request.Method != http.MethodGet || request.URL.Path != "/apis/dex.coreos.com/v1/namespaces/dex-public/oauth2clients" {
++			t.Errorf("unexpected actual storage request: %s %s", request.Method, request.URL.Path)
++			writer.WriteHeader(400)
++			return
++		}
++		json.NewEncoder(writer).Encode(ClientList{Clients: []Client{{ID: "actual-client", Secret: "actual-secret", Public: false, RedirectURIs: []string{"https://app.example.test/callback"}, TrustedPeers: []string{"actual-probe"}}}})
++	}))
++	defer server.Close()
++	client := &client{baseURL: server.URL, namespace: "dex-public", apiVersion: "dex.coreos.com/v1", client: server.Client()}
++	clients, err := client.ListClients(t.Context())
++	if err != nil || len(clients) != 1 || clients[0].ID != "actual-client" || clients[0].Secret != "actual-secret" || clients[0].Public || len(clients[0].TrustedPeers) != 1 {
++		t.Fatal("storage client authority did not survive list", err)
++	}
++}
++
++func TestCoreClientListNeverTurnsAPIFailureIntoEmptyAuthority(t *testing.T) {
++	for _, status := range []int{401, 403, 500} {
++		t.Run(http.StatusText(status), func(t *testing.T) {
++			server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) { writer.WriteHeader(status) }))
++			defer server.Close()
++			client := &client{baseURL: server.URL, namespace: "dex-public", apiVersion: "dex.coreos.com/v1", client: server.Client()}
++			if _, err := client.ListClients(t.Context()); err == nil {
++				t.Fatal("API error became empty client authority")
++			}
++		})
++	}
++}
++
++func TestCoreClientListRespectsCancellation(t *testing.T) {
++	started := make(chan struct{})
++	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) { close(started); <-request.Context().Done() }))
++	defer server.Close()
++	client := &client{baseURL: server.URL, namespace: "dex-public", apiVersion: "dex.coreos.com/v1", client: server.Client()}
++	ctx, cancel := context.WithCancel(t.Context())
++	defer cancel()
++	done := make(chan error, 1)
++	go func() { _, err := client.ListClients(ctx); done <- err }()
++	<-started
++	cancel()
++	if err := <-done; err == nil {
++		t.Fatal("cancelled storage list succeeded")
++	}
++}

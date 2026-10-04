@@ -1,0 +1,50 @@
+{
+  "core": {
+    "version": "1.14.0",
+    "sourceCommit": "c15677633cffa17e99656a7d7ccd1f98d7cb6e4d",
+    "repository": "https://github.com/defenseunicorns/uds-core",
+    "signatureIdentity": "https://github.com/defenseunicorns/uds-core/.github/workflows/publish.yaml@refs/tags/v1.14.0",
+    "signatureIssuer": "https://token.actions.githubusercontent.com"
+  },
+  "go": "go1.27.1",
+  "distroless": "gcr.io/distroless/static-debian13@sha256:e2e927ec666bae08560abb3c55d0659eceabb657f56b6782ab500a9fc7f555e3",
+  "identity": {
+    "bridgeImage": "ark-core-native-identity:20261004-id10",
+    "bridgePlatformManifest": "sha256:38abce3a58a548803016361658becf41c200e3c8357abc5d85ab5446bbdd7f4a",
+    "bridgeImageID": "sha256:da8838fcfaa13d357d150db950c51a2fcef482bc9f738d5ceabf0241d8f1affa",
+    "bridgeBinarySHA256": "fc2b974dfc71c37cc150ef2242f103267b6d1a09570fe5e6f28570f21e5a95f1",
+    "dexImage": "ark-core-native-dex:20261004-id4",
+    "dexPlatformManifest": "sha256:ed91fe7f658bc88d7b2c29cff1144ed32647d792dfbe7b0b8b8fb413e493d508",
+    "dexImageID": "sha256:599d800f07d8dae885eac4106469630f48beb6ba1a604bf1a7fdb0aa6ea11b4c",
+    "dexBinarySHA256": "b4ac41206514b95ee1ebd427983106fdf998cd967efc2e4a970970d1e2e0fa1a",
+    "upstreamDexCommit": "11d2eeb52b42e1980e14cb91e69dd9e3faab2076",
+    "authenticationProfile": "password-only",
+    "saml": "unsupported-fail-closed",
+    "bridgeSourceSHA256": "18372ebfba5143f5fbac65ceefaf5add1f5faaeed17710b9dfcec322ba9f5560",
+    "buildMode": "reproducible-release-buildvcs-false-stripped"
+  },
+  "architecture": "amd64",
+  "signedPackages": [
+    {
+      "name": "core-base",
+      "source": "oci://ghcr.io/defenseunicorns/packages/uds/core-base:1.14.0-upstream",
+      "filename": "zarf-package-core-base-amd64-1.14.0-upstream.tar.zst",
+      "sha256": "d33fdafbd834335d73f49422dec36754eee6ebfca70d1f0c4ed417c5665dda66",
+      "components": [
+        "istio-controlplane",
+        "istio-admin-gateway",
+        "istio-tenant-gateway"
+      ]
+    },
+    {
+      "name": "core-identity-authorization",
+      "source": "oci://ghcr.io/defenseunicorns/packages/uds/core-identity-authorization:1.14.0-upstream",
+      "filename": "zarf-package-core-identity-authorization-amd64-1.14.0-upstream.tar.zst",
+      "sha256": "6659cbf5fe9909fd628ff17e4ae086f7c9f2ceb3b09cb99d69d0bccd76f63c2f",
+      "components": [
+        "authservice",
+        "keycloak"
+      ]
+    }
+  ]
+}

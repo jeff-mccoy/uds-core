@@ -40,3 +40,8 @@ test-results/**
 coverage/**
 
 **/ca.crt
+
+# Native development build outputs and generator scratch data.
+packages/native-dev/.build/**
+src/go-controller/.generated/**
+src/go-controller/**/__pycache__/**

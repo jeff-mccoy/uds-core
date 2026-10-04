@@ -61,13 +61,22 @@ describe("probe validator", () => {
     const probe = await K8s(PrometheusProbe).Apply(
       makeProbe("probe-correct-ns", "policy-tests", "http_200x_sso_policy-tests_uds-app-probe"),
     );
-    expect(probe).toBeDefined();
+    try {
+      expect(probe).toBeDefined();
+    } finally {
+      // This admission fixture has no Package owner to garbage collect it.
+      await K8s(PrometheusProbe).Delete(probe);
+    }
   });
 
   it("should allow a probe using the standard http_2xx module", async () => {
     const probe = await K8s(PrometheusProbe).Apply(
       makeProbe("probe-standard", "policy-tests", "http_2xx"),
     );
-    expect(probe).toBeDefined();
+    try {
+      expect(probe).toBeDefined();
+    } finally {
+      await K8s(PrometheusProbe).Delete(probe);
+    }
   });
 });
