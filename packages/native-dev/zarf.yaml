@@ -60,6 +60,14 @@ components:
         before:
           - description: Prepare infrastructure namespaces and initial Istio trust mount
             cmd: UDS_NATIVE_BOOTSTRAP_CLI="${ZARF_VAR_NATIVE_BOOTSTRAP_CLI}" UDS_NATIVE_BOOTSTRAP_CLI_MODE=uds ./native-dev-bootstrap trust --domain "${ZARF_VAR_DOMAIN}" --admin-domain "${ZARF_VAR_ADMIN_DOMAIN}"
+  - name: native-dev-private-dns
+    required: true
+    actions:
+      onDeploy:
+        before:
+          - description: Load exact private identity DNS before Istiod can discover JWKS authorities
+            maxTotalSeconds: 300
+            cmd: UDS_NATIVE_BOOTSTRAP_CLI="${ZARF_VAR_NATIVE_BOOTSTRAP_CLI}" UDS_NATIVE_BOOTSTRAP_CLI_MODE=uds ./native-dev-bootstrap private-dns --phase install --domain "${ZARF_VAR_DOMAIN}" --admin-domain "${ZARF_VAR_ADMIN_DOMAIN}"
   - name: gateway-api-crds
     required: true
     import:
@@ -178,6 +186,9 @@ components:
     actions:
       onDeploy:
         after:
+          - description: Resolve exact private identity authorities through their real TLS gateways
+            maxTotalSeconds: 300
+            cmd: UDS_NATIVE_BOOTSTRAP_CLI="${ZARF_VAR_NATIVE_BOOTSTRAP_CLI}" UDS_NATIVE_BOOTSTRAP_CLI_MODE=uds ./native-dev-bootstrap private-dns --phase verify --domain "${ZARF_VAR_DOMAIN}" --admin-domain "${ZARF_VAR_ADMIN_DOMAIN}"
           - description: Open tenant authoring only after full native readiness and public gateways
             maxTotalSeconds: 600
             cmd: UDS_NATIVE_BOOTSTRAP_CLI="${ZARF_VAR_NATIVE_BOOTSTRAP_CLI}" UDS_NATIVE_BOOTSTRAP_CLI_MODE=uds ./native-dev-bootstrap finish

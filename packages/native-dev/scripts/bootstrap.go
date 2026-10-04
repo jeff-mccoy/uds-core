@@ -48,6 +48,8 @@ func main() {
 		err = finish(*identity)
 	case "fleet-authority":
 		err = restoreFleetAuthority(*identityNamespace)
+	case "private-dns":
+		err = privateDNS(*phase, *domain, *admin, *identity)
 	default:
 		err = errors.New("unknown bootstrap subcommand")
 	}
