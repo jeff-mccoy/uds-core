@@ -24,6 +24,21 @@ func TestPrivateDNSExactAuthoritiesAndInputBoundaries(t *testing.T) {
 			t.Fatalf("unsafe authority accepted %q", invalid)
 		}
 	}
+	// Use individually valid labels to test the complete authority length,
+	// rather than accidentally rejecting a single oversized label first.
+	publicMaximum := strings.Repeat("a", 63) + "." + strings.Repeat("b", 63) + "." + strings.Repeat("c", 63) + "." + strings.Repeat("d", 57)
+	adminMaximum := strings.Repeat("a", 63) + "." + strings.Repeat("b", 63) + "." + strings.Repeat("c", 63) + "." + strings.Repeat("d", 52)
+	if len("sso."+publicMaximum) != 253 || len("keycloak."+adminMaximum) != 253 {
+		t.Fatal("authority boundary fixture length changed")
+	}
+	if _, err := privateDNSContent(publicMaximum, adminMaximum); err != nil {
+		t.Fatalf("maximum valid complete authorities rejected: %v", err)
+	}
+	for _, values := range [][2]string{{publicMaximum + "d", adminMaximum}, {publicMaximum, adminMaximum + "d"}, {strings.Repeat("a", 64) + ".dev", "admin.uds.dev"}, {"uds.dev", strings.Repeat("a", 64) + ".dev"}, {"uds..dev", "admin.uds.dev"}, {"-uds.dev", "admin.uds.dev"}, {"uds.dev", "admin-.uds.dev"}} {
+		if _, err := privateDNSContent(values[0], values[1]); err == nil {
+			t.Fatalf("invalid authority boundary accepted %q", values)
+		}
+	}
 }
 
 func TestPrivateDNSPreservesCustomKeysAndPinsUIDVersion(t *testing.T) {

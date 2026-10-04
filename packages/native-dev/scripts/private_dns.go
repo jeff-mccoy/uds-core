@@ -11,8 +11,6 @@ import (
 	"regexp"
 	"strings"
 	"time"
-
-	"k8s.io/apimachinery/pkg/util/validation"
 )
 
 const privateDNSKey = "native-dev-identity.override"
@@ -88,12 +86,27 @@ func privateDNS(phase, domain, admin string, identity bool) error {
 }
 
 func privateDNSContent(domain, admin string) (string, error) {
-	for _, value := range []string{domain, admin} {
-		if len(validation.IsDNS1123Subdomain(value)) != 0 || strings.TrimSpace(value) != value {
+	for _, value := range []string{"sso." + domain, "keycloak." + admin} {
+		if !validPrivateDomain(value) {
 			return "", errors.New("private DNS domains must be exact DNS names")
 		}
 	}
 	return fmt.Sprintf("rewrite stop name exact sso.%s tenant-ingressgateway.istio-tenant-gateway.svc.cluster.local\nrewrite stop name exact keycloak.%s admin-ingressgateway.istio-admin-gateway.svc.cluster.local\n", domain, admin), nil
+}
+
+func validPrivateDomain(value string) bool {
+	// Keep this standalone helper standard-library-only, like the rest of the
+	// cold bootstrap binary. Validate the complete prefixed authority.
+	if value == "" || len(value) > 253 || strings.TrimSpace(value) != value {
+		return false
+	}
+	label := regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$`)
+	for _, part := range strings.Split(value, ".") {
+		if !label.MatchString(part) {
+			return false
+		}
+	}
+	return true
 }
 
 func privateDNSImports() error {
