@@ -47,15 +47,26 @@ func validateClient(data map[string]any) error {
 		return err
 	}
 	var mappings []struct {
-		Mapper string            `json:"protocolMapper"`
-		Config map[string]string `json:"config"`
+		Mapper          string            `json:"protocolMapper"`
+		Protocol        string            `json:"protocol"`
+		ConsentRequired bool              `json:"consentRequired"`
+		Config          map[string]string `json:"config"`
 	}
 	raw, err := json.Marshal(data["protocolMappers"])
 	if err != nil || json.Unmarshal(raw, &mappings) != nil {
 		return fmt.Errorf("invalid protocol mapper configuration")
 	}
 	for _, mapping := range mappings {
-		if mapping.Mapper != "oidc-audience-mapper" || mapping.Config["access.token.claim"] != "true" || mapping.Config["id.token.claim"] == "true" || mapping.Config["included.client.audience"] == "" {
+		publicID := data["publicClient"] == true && mapping.Protocol == "openid-connect" && !mapping.ConsentRequired && mapping.Config["id.token.claim"] == "true" && mapping.Config["access.token.claim"] == "false" && mapping.Config["included.client.audience"] != ""
+		if publicID {
+			for key := range mapping.Config {
+				if key != "included.client.audience" && key != "id.token.claim" && key != "access.token.claim" {
+					return fmt.Errorf("unsupported public audience mapper field")
+				}
+			}
+		}
+		serviceAccess := mapping.Config["access.token.claim"] == "true" && mapping.Config["id.token.claim"] != "true"
+		if mapping.Mapper != "oidc-audience-mapper" || (!publicID && !serviceAccess) || mapping.Config["included.client.audience"] == "" {
 			return fmt.Errorf("unsupported required token mapper")
 		}
 	}
@@ -113,6 +124,10 @@ func (m *Management) routeClients(writer http.ResponseWriter, request *http.Requ
 		}
 		if err := validateClient(client.Data); err != nil {
 			apiError(writer, 400, err.Error())
+			return
+		}
+		if err := m.authenticateCoreOwner(request.Context(), principal, &client); err != nil {
+			apiError(writer, 403, err.Error())
 			return
 		}
 		// A rename must remove the previous Dex ID before creating its successor.
@@ -178,6 +193,10 @@ func (m *Management) clientCollection(writer http.ResponseWriter, request *http.
 		}
 		if _, err := m.Clients.Find(request.Context(), realm, client.ClientID()); err == nil {
 			apiError(writer, 409, "client_exists")
+			return
+		}
+		if err := m.authenticateCoreOwner(request.Context(), principal, &client); err != nil {
+			apiError(writer, 403, err.Error())
 			return
 		}
 		if !client.Public() && client.Secret() == "" {

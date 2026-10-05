@@ -26,9 +26,10 @@ type DexClients interface {
 // fields are sent through Dex's official gRPC API. Desired state survives
 // process replacement and is reconciled after a partial API failure.
 type ClientRecord struct {
-	Realm   string         `json:"realm"`
-	Data    map[string]any `json:"data"`
-	Deleted bool           `json:"deleted,omitempty"`
+	Realm     string           `json:"realm"`
+	Data      map[string]any   `json:"data"`
+	CoreOwner *CoreClientOwner `json:"coreOwner,omitempty"`
+	Deleted   bool             `json:"deleted,omitempty"`
 }
 
 func (c ClientRecord) ID() string       { value, _ := c.Data["id"].(string); return value }
@@ -64,9 +65,10 @@ func stringsField(fields map[string]any, key string) []string {
 }
 
 type Clients struct {
-	store StateStore
-	dex   []DexClients
-	mu    sync.Mutex
+	store    StateStore
+	Packages CorePackageSource
+	dex      []DexClients
+	mu       sync.Mutex
 }
 
 func NewClients(store StateStore, dex DexClients) *Clients { return NewReplicatedClients(store, dex) }
@@ -120,6 +122,9 @@ func (c *Clients) Save(ctx context.Context, record ClientRecord) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if !record.Deleted {
+		if err := c.validateCoreRecord(ctx, record); err != nil {
+			return err
+		}
 		if err := validateClient(record.Data); err != nil {
 			return err
 		}
@@ -154,6 +159,16 @@ func (c *Clients) Restore(ctx context.Context) error {
 	return c.restoreLocked(ctx)
 }
 
+// RestoreIfIdle avoids a duplicate periodic scan while a mandatory Save
+// already reconciles both issuers. No grant or publication check is skipped.
+func (c *Clients) RestoreIfIdle(ctx context.Context) (bool, error) {
+	if !c.mu.TryLock() {
+		return false, nil
+	}
+	defer c.mu.Unlock()
+	return true, c.restoreLocked(ctx)
+}
+
 func (c *Clients) readRecords(ctx context.Context) ([]ClientRecord, error) {
 	raw, err := c.store.List(ctx, "client")
 	if err != nil {
@@ -183,6 +198,10 @@ func (c *Clients) restoreLocked(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	active, invalid, err := c.currentCoreRecords(ctx, records)
+	if err != nil {
+		return err
+	}
 	var published bool
 	if err := c.store.Get(ctx, "config", "client-publication", &published); err != nil && !isNotFound(err) {
 		return err
@@ -202,20 +221,22 @@ func (c *Clients) restoreLocked(ctx context.Context) error {
 		for _, client := range listed.Clients {
 			present[client.Id] = true
 		}
-		for _, record := range records {
+		for _, record := range active {
 			if err := ctx.Err(); err != nil {
 				return err
 			}
-			if err := c.synchronizeOne(ctx, dex, record, records, present); err != nil {
+			if err := c.synchronizeOne(ctx, dex, record, active, present); err != nil {
 				return err
 			}
 		}
-	}
-	for _, record := range records {
-		if err := c.publishRecord(ctx, record, records); err != nil {
+		if err := c.verifyFinalCatalogue(ctx, dex, active); err != nil {
 			return err
 		}
 	}
+	if err := c.publishSnapshot(ctx, records, active, invalid); err != nil {
+		return err
+	}
+
 	if !published {
 		return c.store.Put(ctx, "config", "client-publication", true)
 	}
@@ -241,6 +262,9 @@ func serviceAudiences(record ClientRecord) []string {
 func (c *Clients) synchronizeOne(ctx context.Context, dex DexClients, record ClientRecord, records []ClientRecord, present map[string]bool) error {
 	if dex == nil {
 		return fmt.Errorf("Dex management API unavailable")
+	}
+	if record.Deleted && hasLiveClientSuccessor(record, records) {
+		return nil
 	}
 	if record.Deleted || !record.Enabled() {
 		if !present[record.DexID()] {

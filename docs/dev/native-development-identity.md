@@ -8,9 +8,55 @@ Native identity persists through owned Kubernetes Secrets and Dex custom resourc
 
 Apply [the password-only values](../../src/go-controller/dev-identity/values.password-only.yaml) to the Keycloak chart. Set `insecureAdminPasswordGeneration.enabled: true` for a headless disposable install, or supply the existing `keycloak-admin-password` Secret with `username` and `password` keys. The management service checks that Secret on every authenticated administrative operation and invalidates issued management tokens after credential rotation.
 
-This profile requires `devMode: true`, one bridge replica, and explicit disabled values for OTP, X509 login, social login, WebAuthn, and X509 MFA. The chart rejects required email-verification or terms flows, custom realm password policies, and custom realm token-mapper or client-scope configuration. The runtime rejects unknown authentication requirements, unsupported client authentication methods, SAML clients, required user actions, and token mappers it cannot enforce. The supported audience mapper supplies configured access-token audiences for uptime service accounts.
+This profile requires `devMode: true`, one bridge replica, and explicit disabled values for OTP, X509 login, social login, WebAuthn, and X509 MFA. The chart rejects required email-verification or terms flows, custom realm password policies, and custom realm token-mapper or client-scope configuration. The runtime rejects unknown authentication requirements, unsupported client authentication methods, SAML clients, required user actions, and token mappers it cannot enforce. Supported audience mappers supply configured access-token audiences for uptime service accounts and a constrained ID-token audience for a public PKCE client paired with its protected app.
 
 The profile preserves the public issuer `https://sso.<domain>/realms/uds` and the admin issuer `https://keycloak.<adminDomain>/realms/uds`. Each issuer has independent Dex storage and signing keys. Browser sessions belong to their issuing host. Managed interactive clients receive real Dex `profile`, `email`, and `groups` defaults, including when Core Authservice requests only `openid`. An explicit supported `defaultClientScopes` list replaces those profile defaults; an empty list preserves that choice. The bridge leaves state, nonce, Proof Key for Code Exchange (PKCE), and redirect bindings unchanged. It rejects custom or role scopes that this profile cannot enforce. The Go bridge retains Core's current login labels, account path, and `KEYCLOAK_SESSION` cookie contract for the browser fixtures. Its pages include real `head` and `body` elements so the stock gateway classification filter can inject the configured frame. Sign-in ends on a same-origin document before starting the OIDC navigation. This keeps `form-action 'self'` enforced without applying the form's restriction to the registered application's callback. The bridge rejects external, protocol-relative, and malformed return targets before rendering that navigation.
+
+## Register a public CLI for a protected app
+
+Native public authorization-code clients require declared `S256` PKCE. Both authorization endpoint spellings reject missing, plain, malformed, or duplicate challenges before login. Both token endpoint spellings reject missing or malformed verifiers; Dex also verifies the stored challenge and rejects older unbound public codes. Confidential clients retain their existing behavior unless you declare an `S256` requirement.
+
+Enable Core's existing `ALLOW_PUBLIC_CLIENTS` flag and declare the confidential server and its public CLI in the same `Package`. The server must use `enableAuthserviceSelector`. The CLI must use standard code flow, exact registered loopback redirects, no secret or service-account grant, and this existing mapper shape:
+
+```yaml title="ark-package.yaml"
+spec:
+  sso:
+    - clientId: ark-server
+      name: Ark
+      enableAuthserviceSelector:
+        app: ark
+      redirectUris:
+        - https://ark.example.test/login
+      standardFlowEnabled: true
+      publicClient: false
+      fullScopeAllowed: false
+    - clientId: ark-cli
+      name: Ark CLI
+      publicClient: true
+      standardFlowEnabled: true
+      fullScopeAllowed: false
+      redirectUris:
+        - http://localhost:8000
+        - http://127.0.0.1:8000
+      defaultClientScopes: [profile, email, groups, offline_access]
+      attributes:
+        pkce.code.challenge.method: S256
+      protocolMappers:
+        - name: ark-server-audience
+          protocol: openid-connect
+          protocolMapper: oidc-audience-mapper
+          config:
+            # Only the paired protected app receives the CLI ID-token audience.
+            included.client.audience: ark-server
+            id.token.claim: "true"
+            access.token.claim: "false"
+```
+
+The operator adds reserved provenance only to explicitly paired clients. The bridge accepts it only from the authenticated operator, then checks the authoritative Kubernetes `Package`, its UID, and both exact client specifications. The native chart grants `get` on `uds.dev/packages`, without list, watch, or mutation privileges. User-supplied reserved attributes, another `Package`, a replaced or deleted UID, a foreign target, or an unsupported grant fails closed. Ordinary client captures retain their existing representation.
+
+The bridge requests Dex's real cross-client scope and publishes the public CLI as a trusted peer only of that server. The signed ID token contains both client audiences with the CLI as `azp`; its subject matches the same directory user signing into the server. The CLI access token retains only its own audience. Package changes and partial two-issuer publication fence the affected grants. Restoring bridge state cannot restore a peer whose live Package authority is missing. Dex also persists an internal grant-generation scope bound to the original Package UID and exact client pair. The bridge rejects caller-supplied reserved scopes. Before signing or rotating a refresh grant, Dex checks the original stored binding through the private mTLS authority, including when a caller narrows ordinary scopes. Deleting and recreating the same Package name and client IDs cannot migrate an older code or refresh token into the replacement. Older paired grants without this binding require fresh authentication. This binding adds no identity claims or additional authority. Existing signed tokens retain their normal five-minute expiry; refresh cannot cross a revoked pair.
+
+Core's Authservice policy invokes cookie-based login only when the `Authorization` header is absent. A bearer request instead passes through Istio's signature, issuer, audience, and group checks. Missing, tampered, or wrong-audience tokens do not grant access. A client such as `kubelogin` must use the signed ID token, require `S256`, and request the supported group scopes. A hosted kubeconfig points at the separately authorized Ark API broker; it never contains the guest's credentials. This provider contract alone does not qualify or enable a hosted broker.
 
 ## Provide the runtime inputs
 
@@ -32,7 +78,7 @@ The bridge serves Core's gateway and ambient backchannel on port 8080, direct HT
 
 ## Preserve state and authority
 
-The bridge stores owned user, group, client, browser-session, and administrative-token records as Secrets in `keycloak`. It stores bearer-token digests rather than bearer values. Bootstrap initialization runs once, so restarting the service does not recreate deleted users or overwrite changed credentials. Dex stores authorization requests, refresh tokens, signing keys, and clients in its upstream Kubernetes storage resources. The generated chart includes the ten pinned Dex storage definitions. Client reconciliation reads one desired-state snapshot and one client list per issuer, then skips unchanged client writes. The bridge replaces clients when Dex's update API cannot clear a name, redirect list, or trusted-peer list. It compares normalized client records and skips unchanged management writes. Client publication binds a digest to the exact desired revision and derived trusted peers. The bridge fences changed clients and their audience dependencies before mutation, then releases those revisions only after both issuers match. Incomplete publication blocks affected grants across process replacement while unrelated published clients remain available. A stale publication acknowledgement cannot authorize a newer revision. The bridge bounds its shared Kubernetes API budget at 20 requests per second with a burst of 40 so reconciliation does not exhaust the default client budget during interactive sign-in.
+The bridge stores owned user, group, client, browser-session, and administrative-token records as Secrets in `keycloak`. It stores bearer-token digests rather than bearer values. Bootstrap initialization runs once, so restarting the service does not recreate deleted users or overwrite changed credentials. Dex stores authorization requests, refresh tokens, signing keys, and clients in its upstream Kubernetes storage resources. The generated chart includes the ten pinned Dex storage definitions. Client reconciliation reads one desired-state snapshot and one client list per issuer, then skips unchanged client writes. After both issuers match, it reads the exact owned publication acknowledgements in one Kubernetes list. A periodic scan defers while a mandatory management reconciliation already holds the client lock. The next idle scan performs the complete checks; an actual scan failure still affects readiness. This avoids consuming a periodic deadline while waiting behind a writer. Tombstones cannot add per-record publication reads to every management update. Signing reuses one authoritative client snapshot for user and grant-generation validation; token checks retain current publication and live Package checks. The bridge replaces clients when Dex's update API cannot clear a name, redirect list, or trusted-peer list. An older deletion record cannot finalize a newer live client that reuses its logical client ID. After reconciliation, the bridge rechecks each issuer's final client catalogue before acknowledging publication. It compares normalized client records and skips unchanged management writes. Client publication binds a digest to the exact desired revision and derived trusted peers. The bridge fences changed clients and their audience dependencies before mutation, then releases those revisions only after both issuers match. Incomplete publication blocks affected grants across process replacement while unrelated published clients remain available. A stale publication acknowledgement cannot authorize a newer revision. The bridge bounds its shared Kubernetes API budget at 20 requests per second with a burst of 40 so reconciliation does not exhaust the default client budget during interactive sign-in.
 
 The credential service strips incoming `X-Remote-*` headers. It sends directory identity to Dex only after authenticating the connector callback. Dex checks the private directory at issuance and refresh, including required `groups.anyOf` memberships. Disabling a user or changing credentials advances a persistent session version; a late login or old refresh token cannot cross that revocation boundary. Already issued access tokens expire after their configured five-minute lifetime. Ordinary application sessions receive a real Dex refresh grant without requiring the caller to request a long-lived offline session. The bridge requests Dex's `offline_access` scope for this compatibility, and the chart enables rotation with an eight-hour absolute lifetime and a thirty-minute idle limit. Refresh rechecks directory identity, required groups, credential version, and completed client publication. This profile does not provide unbounded offline credentials.
 
@@ -69,7 +115,7 @@ python3 src/go-controller/dev-identity/build-images.py \
   --save-images
 ```
 
-The script clones upstream Dex commit `11d2eeb52b42e1980e14cb91e69dd9e3faab2076` into that output directory and verifies the [Core development patch](../../src/go-controller/dev-identity/dex-core-dev.patch) before applying it. You can select an existing Git checkout or HTTPS mirror with `--dex-repository`; the script clones committed source and excludes any local working-tree changes. The derivative adds opt-in authenticated directory refresh, directory-backed service-account grants, exact managed claims, and user authorization at token issuance. The build creates local images and an optional `images.tar`; it does not read private runtime configuration, publish images, or change a cluster.
+The script clones upstream Dex commit `11d2eeb52b42e1980e14cb91e69dd9e3faab2076` into that output directory and verifies the [Core development patch](../../src/go-controller/dev-identity/dex-core-dev.patch) before applying it. You can select an existing Git checkout or HTTPS mirror with `--dex-repository`; the script clones committed source and excludes any local working-tree changes. The derivative adds opt-in authenticated directory refresh, directory-backed service-account grants, exact managed claims, mandatory public-client S256, and user authorization at token issuance. The build creates local images and an optional `images.tar`; it does not read private runtime configuration, publish images, or change a cluster.
 
 `build-receipt.json` records the source, patch, tool, binary, and local image digests. Supply `--expected-bridge-binary SHA256` and `--expected-dex-binary SHA256` to reject a binary that differs from a qualified checkpoint before creating images. Both modes use `-trimpath` and strip debug information and symbol tables with `-ldflags '-s -w'`. The default `release` mode adds `-buildvcs=false` so a fork commit, clone, or source archive does not change the binary's embedded VCS metadata. The receipt records the build inputs separately.
 

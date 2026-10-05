@@ -76,6 +76,10 @@ func (b *Bridge) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		return
 	}
 	if b.Admin != nil && (request.URL.Path == b.IssuerPath+"/auth" || request.URL.Path == b.IssuerPath+"/protocol/openid-connect/auth") {
+		if err := b.Admin.checkPKCEAuth(request.Context(), request); err != nil {
+			http.Error(writer, "OIDC client policy denied", http.StatusBadRequest)
+			return
+		}
 		user, ok := b.user(request)
 		if !ok {
 			b.loginForm(writer, request)

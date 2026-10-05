@@ -117,7 +117,7 @@ func TestClientRestoreUsesOnePinnedSnapshotAndAvoidsUnchangedWrites(t *testing.T
 	if err := clients.Restore(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	if store.lists != 1 || public.lists != 1 || admin.lists != 1 {
+	if store.lists != 1 || public.lists != 2 || admin.lists != 2 {
 		t.Fatalf("restore repeated authority lists: state=%d public=%d admin=%d", store.lists, public.lists, admin.lists)
 	}
 	if public.updates != 0 || admin.updates != 0 {

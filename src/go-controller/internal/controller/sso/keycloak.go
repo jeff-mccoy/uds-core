@@ -56,6 +56,9 @@ func ReconcileKeycloak(ctx context.Context, coreClient corev1client.CoreV1Interf
 
 	for _, ssoSpec := range pkg.Spec.Sso {
 		client := convertSsoToClient(ssoSpec)
+		if err := addCoreAudienceOwner(&client, pkg); err != nil {
+			return nil, err
+		}
 
 		slog.Debug("Syncing Keycloak client",
 			"package", pkgName, "clientId", client.ClientID,
@@ -143,6 +146,7 @@ func syncClient(ctx context.Context, client Client) (Client, error) {
 
 	if existing != nil {
 		client.ID = existing.ID
+		clearRemovedCoreAudience(*existing, &client)
 		if clientMatchesDesired(*existing, client) {
 			return *existing, nil
 		}

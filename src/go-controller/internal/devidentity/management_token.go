@@ -73,6 +73,12 @@ func (m *Management) routeToken(writer http.ResponseWriter, request *http.Reques
 	master := strings.HasPrefix(request.URL.Path, "/realms/master/")
 	grant := request.Form.Get("grant_type")
 	if !master && grant != "client_credentials" {
+		if grant == "authorization_code" || grant == "refresh_token" {
+			if err := m.checkPKCEToken(request.Context(), request); err != nil {
+				apiError(writer, 400, "client_policy_denied")
+				return true
+			}
+		}
 		return false
 	}
 	clientID := request.Form.Get("client_id")

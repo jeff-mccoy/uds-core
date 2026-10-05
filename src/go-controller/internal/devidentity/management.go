@@ -53,7 +53,7 @@ func (m *Management) ServeHTTP(writer http.ResponseWriter, request *http.Request
 	if m.routeFrontend(writer, request) {
 		return true
 	}
-	if strings.HasPrefix(path, "/realms/") && strings.HasSuffix(path, "/protocol/openid-connect/token") {
+	if strings.HasPrefix(path, "/realms/") && (strings.HasSuffix(path, "/protocol/openid-connect/token") || path == m.IssuerPath+"/token") {
 		return m.routeToken(writer, request)
 	}
 	if !strings.HasPrefix(path, "/admin/realms/") {

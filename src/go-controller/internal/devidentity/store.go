@@ -140,3 +140,37 @@ func (s *MemoryState) List(ctx context.Context, kind string) ([][]byte, error) {
 	}
 	return result, nil
 }
+
+// ReadMany maps only the requested exact keys to their owned Secret names.
+// A list from another key cannot acknowledge a current publication.
+func (s *KubeState) ReadMany(ctx context.Context, kind string, keys []string) (map[string][]byte, error) {
+	secrets, err := s.secrets.List(ctx, metav1.ListOptions{LabelSelector: stateLabel + "=" + kind})
+	if err != nil {
+		return nil, err
+	}
+	names := map[string]string{}
+	for _, key := range keys {
+		names[stateName(kind, key)] = key
+	}
+	result := map[string][]byte{}
+	for _, secret := range secrets.Items {
+		if key, requested := names[secret.Name]; requested {
+			result[key] = append([]byte(nil), secret.Data["state.json"]...)
+		}
+	}
+	return result, nil
+}
+func (s *MemoryState) ReadMany(ctx context.Context, kind string, keys []string) (map[string][]byte, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	result := map[string][]byte{}
+	for _, key := range keys {
+		if value, found := s.values[kind+"/"+key]; found {
+			result[key] = append([]byte(nil), value...)
+		}
+	}
+	return result, nil
+}

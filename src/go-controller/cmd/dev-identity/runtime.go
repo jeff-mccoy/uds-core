@@ -20,6 +20,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 )
@@ -84,6 +85,11 @@ func initialize(ctx context.Context, cfg configuration) (*hostRouter, *devidenti
 		return nil, nil, closeAPIs, err
 	}
 	clients := devidentity.NewReplicatedClients(store, apis...)
+	packageClient, err := dynamic.NewForConfig(clusterConfig)
+	if err != nil {
+		return nil, nil, closeAPIs, err
+	}
+	clients.Packages = devidentity.KubeCorePackages{Client: packageClient}
 	public, err := makeBridge(directory, cfg, cfg.DexUpstream, cfg.PublicHost)
 	if err != nil {
 		return nil, nil, closeAPIs, err

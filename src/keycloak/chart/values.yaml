@@ -14,8 +14,8 @@ image:
 nativeIdentity:
   enabled: false
   authenticationProfile: password-only
-  bridgeImage: "ark-core-native-identity:20261004-id10"
-  dexImage: "ark-core-native-dex:20261004-id4"
+  bridgeImage: "ark-core-native-identity:20261003-id17"
+  dexImage: "ark-core-native-dex:20261003-id7"
   imagePullPolicy: IfNotPresent
   tlsSecret: uds-native-identity-tls
   controllerNamespace: uds-system

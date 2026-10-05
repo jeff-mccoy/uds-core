@@ -27,6 +27,11 @@ func trustedPeers(record ClientRecord, records []ClientRecord) []string {
 			peers = append(peers, peer.DexID())
 		}
 	}
+	for _, peer := range records {
+		if peer.Realm == record.Realm && !peer.Deleted && peer.Enabled() && peer.Public() && clientAttributes(peer)["pkce.code.challenge.method"] == "S256" && sameCoreOwner(peer.CoreOwner, record.CoreOwner) && slices.Contains(publicAudienceTargets(peer.Data), record.ClientID()) {
+			peers = append(peers, peer.DexID())
+		}
+	}
 	sort.Strings(peers)
 	return slices.Compact(peers)
 }
@@ -38,7 +43,7 @@ func publicationDigest(record ClientRecord, records []ClientRecord) (string, err
 	}
 	targets := []targetRevision{}
 	for _, target := range records {
-		if target.Realm == record.Realm && slices.Contains(serviceAudiences(record), target.ClientID()) {
+		if target.Realm == record.Realm && !target.Deleted && slices.Contains(publicationAudiences(record), target.ClientID()) {
 			targets = append(targets, targetRevision{target, trustedPeers(target, records)})
 		}
 	}
@@ -106,6 +111,9 @@ func (c *Clients) PublishedClient(ctx context.Context, realm, logicalID string) 
 	}
 	for _, record := range records {
 		if record.Realm == realm && record.ClientID() == logicalID && !record.Deleted {
+			if err := c.validateCoreRecord(ctx, record); err != nil {
+				return ClientRecord{}, nil, err
+			}
 			return record, records, c.requireRecordPublished(ctx, record, records)
 		}
 	}
@@ -144,7 +152,7 @@ func (c *Clients) fenceChangedRecords(ctx context.Context, before, after []Clien
 func (c *Clients) fenceRelatedRecords(ctx context.Context, changed ClientRecord, records []ClientRecord) error {
 	seen := map[string]bool{}
 	for _, record := range append([]ClientRecord{changed}, records...) {
-		related := recordKey(record) == recordKey(changed) || record.Realm == changed.Realm && (slices.Contains(serviceAudiences(record), changed.ClientID()) || slices.Contains(serviceAudiences(changed), record.ClientID()))
+		related := recordKey(record) == recordKey(changed) || record.Realm == changed.Realm && (slices.Contains(publicationAudiences(record), changed.ClientID()) || slices.Contains(publicationAudiences(changed), record.ClientID()))
 		key := recordKey(record)
 		if !related || seen[key] {
 			continue
@@ -161,4 +169,8 @@ func (c *Clients) fenceRelatedRecords(ctx context.Context, changed ClientRecord,
 		}
 	}
 	return nil
+}
+
+func publicationAudiences(record ClientRecord) []string {
+	return slices.Compact(append(serviceAudiences(record), publicAudienceTargets(record.Data)...))
 }

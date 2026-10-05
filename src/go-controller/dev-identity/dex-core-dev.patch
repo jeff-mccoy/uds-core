@@ -167,7 +167,7 @@ index 3fe451b..7f9b37a 100644
  	}, nil
  }
 diff --git a/server/handlers.go b/server/handlers.go
-index 62f1650..98910a6 100644
+index 62f1650..78f28fc 100644
 --- a/server/handlers.go
 +++ b/server/handlers.go
 @@ -879,6 +879,8 @@ func (s *Server) handleToken(w http.ResponseWriter, r *http.Request) {
@@ -179,21 +179,87 @@ index 62f1650..98910a6 100644
  	case grantTypeDeviceCode:
  		s.handleDeviceToken(w, r)
  	case grantTypeAuthorizationCode:
+@@ -928,6 +930,11 @@ func (s *Server) handleAuthCode(w http.ResponseWriter, r *http.Request, client s
+ 		return
+ 	}
+ 
++	if s.developmentIdentity != nil && client.Public && !validDevelopmentPKCEToken(r.PostForm, authCode.PKCE) {
++		s.tokenErrHelper(w, errInvalidGrant, "Public native client requires S256 code verifier.", http.StatusBadRequest)
++		return
++	}
++
+ 	// RFC 7636 (PKCE)
+ 	codeChallengeFromStorage := authCode.PKCE.CodeChallenge
+ 	providedCodeVerifier := r.PostFormValue("code_verifier")
+@@ -959,6 +966,11 @@ func (s *Server) handleAuthCode(w http.ResponseWriter, r *http.Request, client s
+ 		return
+ 	}
+ 
++	if err := s.authorizeDevelopmentUser(ctx, client.ID, authCode.Claims.UserID, authCode.ConnectorID, authCode.Scopes); err != nil {
++		s.tokenErrHelper(w, errInvalidGrant, "Original grant generation revoked.", http.StatusBadRequest)
++		return
++	}
++
+ 	tokenResponse, err := s.exchangeAuthCode(ctx, w, authCode, client)
+ 	if err != nil {
+ 		s.tokenErrHelper(w, errServerError, "", http.StatusInternalServerError)
+@@ -971,14 +983,12 @@ func (s *Server) exchangeAuthCode(ctx context.Context, w http.ResponseWriter, au
+ 	accessToken, _, err := s.newAccessToken(ctx, client.ID, authCode.Claims, authCode.Scopes, authCode.Nonce, authCode.ConnectorID)
+ 	if err != nil {
+ 		s.logger.ErrorContext(ctx, "failed to create new access token", "err", err)
+-		s.tokenErrHelper(w, errServerError, "", http.StatusInternalServerError)
+ 		return nil, err
+ 	}
+ 
+ 	idToken, expiry, err := s.newIDToken(ctx, client.ID, authCode.Claims, authCode.Scopes, authCode.Nonce, accessToken, authCode.ID, authCode.ConnectorID)
+ 	if err != nil {
+ 		s.logger.ErrorContext(ctx, "failed to create ID token", "err", err)
+-		s.tokenErrHelper(w, errServerError, "", http.StatusInternalServerError)
+ 		return nil, err
+ 	}
+ 
 diff --git a/server/oauth2.go b/server/oauth2.go
-index 5821f0f..bf3f232 100644
+index 5821f0f..2c59ca0 100644
 --- a/server/oauth2.go
 +++ b/server/oauth2.go
-@@ -313,6 +313,9 @@ func genSubject(userID string, connID string) (string, error) {
+@@ -266,6 +266,15 @@ type federatedIDClaims struct {
+ }
+ 
+ func (s *Server) newAccessToken(ctx context.Context, clientID string, claims storage.Claims, scopes []string, nonce, connID string) (accessToken string, expiry time.Time, err error) {
++	if s.developmentIdentity != nil {
++		client, err := s.storage.GetClient(ctx, clientID)
++		if err != nil {
++			return "", time.Time{}, err
++		}
++		if client.Public {
++			scopes = developmentPublicAccessScopes(scopes)
++		}
++	}
+ 	return s.newIDToken(ctx, clientID, claims, scopes, nonce, storage.NewID(), "", connID)
+ }
+ 
+@@ -313,6 +322,9 @@ func genSubject(userID string, connID string) (string, error) {
  }
  
  func (s *Server) newIDToken(ctx context.Context, clientID string, claims storage.Claims, scopes []string, nonce, accessToken, code, connID string) (idToken string, expiry time.Time, err error) {
-+	if err := s.authorizeDevelopmentUser(ctx, clientID, claims.UserID, connID); err != nil {
++	if err := s.authorizeDevelopmentUser(ctx, clientID, claims.UserID, connID, scopes); err != nil {
 +		return "", time.Time{}, err
 +	}
  	issuedAt := s.now()
  	expiry = issuedAt.Add(s.idTokensValidFor)
  
-@@ -473,8 +476,7 @@ func (s *Server) parseAuthorizationRequest(r *http.Request) (*storage.AuthReques
+@@ -455,6 +467,10 @@ func (s *Server) parseAuthorizationRequest(r *http.Request) (*storage.AuthReques
+ 		return &redirectedAuthErr{state, redirectURI, typ, fmt.Sprintf(format, a...)}
+ 	}
+ 
++	if s.developmentIdentity != nil && client.Public && !validDevelopmentPKCEAuthorization(q) {
++		return nil, newRedirectedErr(errInvalidRequest, "Public native client requires S256 authorization-code PKCE")
++	}
++
+ 	if connectorID != "" {
+ 		connectors, err := s.storage.ListConnectors(ctx)
+ 		if err != nil {
+@@ -473,8 +489,7 @@ func (s *Server) parseAuthorizationRequest(r *http.Request) (*storage.AuthReques
  	}
  
  	if codeChallengeMethod != codeChallengeMethodS256 && codeChallengeMethod != codeChallengeMethodPlain {
@@ -203,7 +269,20 @@ index 5821f0f..bf3f232 100644
  	}
  
  	var (
-@@ -557,8 +559,7 @@ func (s *Server) parseAuthorizationRequest(r *http.Request) (*storage.AuthReques
+@@ -488,6 +503,12 @@ func (s *Server) parseAuthorizationRequest(r *http.Request) (*storage.AuthReques
+ 			hasOpenIDScope = true
+ 		case scopeOfflineAccess, scopeEmail, scopeProfile, scopeGroups, scopeFederatedID:
+ 		default:
++			if s.developmentIdentity != nil && strings.HasPrefix(scope, developmentGenerationPrefix) {
++				if _, err := developmentGrantGeneration(scopes); err != nil {
++					return nil, newRedirectedErr(errInvalidScope, "Invalid grant generation")
++				}
++				continue
++			}
+ 			peerID, ok := parseCrossClientScope(scope)
+ 			if !ok {
+ 				unrecognized = append(unrecognized, scope)
+@@ -557,8 +578,7 @@ func (s *Server) parseAuthorizationRequest(r *http.Request) (*storage.AuthReques
  	}
  	if rt.token {
  		if redirectURI == redirectURIOOB {
@@ -213,6 +292,39 @@ index 5821f0f..bf3f232 100644
  		}
  	}
  
+diff --git a/server/refreshhandlers.go b/server/refreshhandlers.go
+index b47bd52..4891b63 100644
+--- a/server/refreshhandlers.go
++++ b/server/refreshhandlers.go
+@@ -414,12 +414,28 @@ func (s *Server) handleRefreshToken(w http.ResponseWriter, r *http.Request, clie
+ 		return
+ 	}
+ 
++	// Check the original stored grant before caller-requested scope narrowing
++	// or rotation. A replacement client cannot adopt an older UID grant.
++	if err := s.authorizeDevelopmentUser(r.Context(), client.ID, rCtx.storageToken.Claims.UserID, rCtx.storageToken.ConnectorID, rCtx.storageToken.Scopes); err != nil {
++		s.tokenErrHelper(w, errInvalidGrant, "Original grant generation revoked.", http.StatusBadRequest)
++		return
++	}
++
+ 	rCtx.scopes, rerr = s.getRefreshScopes(r, rCtx.storageToken)
+ 	if rerr != nil {
+ 		s.refreshTokenErrHelper(w, rerr)
+ 		return
+ 	}
+ 
++	if s.developmentIdentity != nil {
++		var err error
++		rCtx.scopes, err = retainDevelopmentGrantGeneration(rCtx.storageToken.Scopes, rCtx.scopes)
++		if err != nil {
++			s.tokenErrHelper(w, errInvalidGrant, "Original grant generation revoked.", http.StatusBadRequest)
++			return
++		}
++	}
++
+ 	newToken, ident, rerr := s.updateRefreshToken(r.Context(), rCtx)
+ 	if rerr != nil {
+ 		s.refreshTokenErrHelper(w, rerr)
 diff --git a/server/server.go b/server/server.go
 index e923e3e..88008b8 100644
 --- a/server/server.go
@@ -475,12 +587,173 @@ index 0000000..20a2209
 +	identity.Groups = user.Groups
 +	return identity, nil
 +}
+diff --git a/server/development_generation.go b/server/development_generation.go
+new file mode 100644
+index 0000000..8a67f7c
+--- /dev/null
++++ b/server/development_generation.go
+@@ -0,0 +1,47 @@
++// Copyright 2026 The Dex Authors
++// SPDX-License-Identifier: Apache-2.0
++
++package server
++
++import (
++	"fmt"
++	"regexp"
++	"strings"
++)
++
++const developmentGenerationPrefix = "uds:package-generation:"
++
++var developmentGenerationValue = regexp.MustCompile(`^[0-9a-f]{64}$`)
++
++func developmentGrantGeneration(scopes []string) (string, error) {
++	result := ""
++	for _, scope := range scopes {
++		if !strings.HasPrefix(scope, developmentGenerationPrefix) {
++			continue
++		}
++		value := strings.TrimPrefix(scope, developmentGenerationPrefix)
++		if result != "" || !developmentGenerationValue.MatchString(value) {
++			return "", fmt.Errorf("invalid native grant generation")
++		}
++		result = value
++	}
++	return result, nil
++}
++
++func retainDevelopmentGrantGeneration(original, requested []string) ([]string, error) {
++	value, err := developmentGrantGeneration(original)
++	if err != nil {
++		return nil, err
++	}
++	requestedValue, err := developmentGrantGeneration(requested)
++	if err != nil {
++		return nil, err
++	}
++	if requestedValue != "" && requestedValue != value {
++		return nil, fmt.Errorf("refresh cannot choose another generation")
++	}
++	if value != "" && requestedValue == "" {
++		requested = append(append([]string(nil), requested...), developmentGenerationPrefix+value)
++	}
++	return requested, nil
++}
+diff --git a/server/development_generation_test.go b/server/development_generation_test.go
+new file mode 100644
+index 0000000..9c0404b
+--- /dev/null
++++ b/server/development_generation_test.go
+@@ -0,0 +1,102 @@
++// Copyright 2026 The Dex Authors
++// SPDX-License-Identifier: Apache-2.0
++
++package server
++
++import (
++	"crypto/sha256"
++	"encoding/base64"
++	"encoding/json"
++	"net/http"
++	"net/url"
++	"strings"
++	"testing"
++	"time"
++
++	"github.com/dexidp/dex/storage"
++	"github.com/stretchr/testify/require"
++)
++
++func TestDevelopmentOriginalGenerationSurvivesRefreshScopeNarrowing(t *testing.T) {
++	old := developmentGenerationPrefix + strings.Repeat("a", 64)
++	scopes, err := retainDevelopmentGrantGeneration([]string{scopeOpenID, scopeGroups, old}, []string{scopeOpenID})
++	require.NoError(t, err)
++	require.Equal(t, []string{scopeOpenID, old}, scopes)
++	_, err = retainDevelopmentGrantGeneration([]string{old}, []string{developmentGenerationPrefix + strings.Repeat("b", 64)})
++	require.Error(t, err)
++	for _, scopes := range [][]string{{old, old}, {developmentGenerationPrefix + "short"}, {developmentGenerationPrefix + strings.Repeat("A", 64)}} {
++		_, err := developmentGrantGeneration(scopes)
++		require.Error(t, err)
++	}
++	original := []string{scopeOpenID, scopeProfile}
++	actual, err := retainDevelopmentGrantGeneration(original, original)
++	require.NoError(t, err)
++	require.Equal(t, original, actual)
++}
++
++func TestDevelopmentSameClientIDRecreationCannotAdoptOriginalRefreshGrant(t *testing.T) {
++	generation := strings.Repeat("a", 64)
++	authorityCalls := 0
++	authority, cfg := developmentAuthority(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		authorityCalls++
++		require.NotEmpty(t, r.TLS.VerifiedChains)
++		if r.URL.Query().Get("clientId") != "cli" || r.URL.Query().Get("userId") != "owner" || r.URL.Query().Get("clientGeneration") != generation {
++			w.WriteHeader(403)
++			return
++		}
++		w.WriteHeader(204)
++	}))
++	cfg.UserAuthorizationEndpoint = authority.URL + "/internal/user-authorization"
++	httpServer, s := newTestServer(t, func(c *Config) { c.DevelopmentIdentity = &cfg })
++	defer httpServer.Close()
++	require.NoError(t, s.storage.CreateConnector(t.Context(), storage.Connector{ID: "uds", Type: "mockCallback", Name: "unit trusted directory", ResourceVersion: "1"}))
++	cli := storage.Client{ID: "cli", Public: true, RedirectURIs: []string{"https://app.example.test/callback"}}
++	require.NoError(t, s.storage.CreateClient(t.Context(), cli))
++	verifier := strings.Repeat("v", 43)
++	hash := sha256.Sum256([]byte(verifier))
++	challenge := base64.RawURLEncoding.EncodeToString(hash[:])
++	issueCode := func(gen string) string {
++		code := storage.NewID()
++		require.NoError(t, s.storage.CreateAuthCode(t.Context(), storage.AuthCode{ID: code, ClientID: "cli", ConnectorID: "uds", RedirectURI: cli.RedirectURIs[0], Expiry: time.Now().Add(time.Minute), Nonce: "real-nonce", Scopes: []string{scopeOpenID, scopeOfflineAccess, developmentGenerationPrefix + gen}, Claims: storage.Claims{UserID: "owner", Username: "Owner", PreferredUsername: "owner"}, PKCE: storage.PKCE{CodeChallenge: challenge, CodeChallengeMethod: "S256"}}))
++		return code
++	}
++	exchange := func(code string) *http.Response {
++		response, err := http.PostForm(httpServer.URL+"/token", url.Values{"client_id": {"cli"}, "grant_type": {"authorization_code"}, "code": {code}, "redirect_uri": {cli.RedirectURIs[0]}, "code_verifier": {verifier}})
++		require.NoError(t, err)
++		return response
++	}
++	response := exchange(issueCode(generation))
++	require.Equal(t, 200, response.StatusCode)
++	var tokens struct {
++		ID      string `json:"id_token"`
++		Refresh string `json:"refresh_token"`
++	}
++	require.NoError(t, json.NewDecoder(response.Body).Decode(&tokens))
++	response.Body.Close()
++	require.NotEmpty(t, tokens.ID)
++	require.NotEmpty(t, tokens.Refresh)
++	originalCalls := authorityCalls
++	require.Greater(t, originalCalls, 0)
++	// The same logical client ID is genuinely replaced in Dex storage.
++	require.NoError(t, s.storage.DeleteClient(t.Context(), "cli"))
++	require.NoError(t, s.storage.CreateClient(t.Context(), cli))
++	generation = strings.Repeat("b", 64)
++	for _, scope := range []string{"", scopeOpenID, scopeOpenID + " " + developmentGenerationPrefix + generation} {
++		response, err := http.PostForm(httpServer.URL+"/token", url.Values{"client_id": {"cli"}, "grant_type": {"refresh_token"}, "refresh_token": {tokens.Refresh}, "scope": {scope}})
++		require.NoError(t, err)
++		require.Equal(t, 400, response.StatusCode)
++		var failure map[string]string
++		require.NoError(t, json.NewDecoder(response.Body).Decode(&failure))
++		response.Body.Close()
++		require.Equal(t, errInvalidGrant, failure["error"])
++	}
++	// An outstanding code from the old UID also cannot obtain a signature.
++	response = exchange(issueCode(strings.Repeat("a", 64)))
++	require.GreaterOrEqual(t, response.StatusCode, 400)
++	response.Body.Close()
++	// A fresh S256 authorization grant for the replacement is usable.
++	response = exchange(issueCode(generation))
++	require.Equal(t, 200, response.StatusCode)
++	response.Body.Close()
++	require.Greater(t, authorityCalls, originalCalls)
++}
 diff --git a/server/development_identity.go b/server/development_identity.go
 new file mode 100644
-index 0000000..a25dfab
+index 0000000..3ae0bdd
 --- /dev/null
 +++ b/server/development_identity.go
-@@ -0,0 +1,134 @@
+@@ -0,0 +1,141 @@
 +// Copyright 2026 The Dex Authors
 +// SPDX-License-Identifier: Apache-2.0
 +
@@ -547,14 +820,21 @@ index 0000000..a25dfab
 +	return identity, nil
 +}
 +
-+func (s *Server) authorizeDevelopmentUser(ctx context.Context, clientID, userID, connectorID string) error {
++func (s *Server) authorizeDevelopmentUser(ctx context.Context, clientID, userID, connectorID string, scopes []string) error {
 +	if s.developmentIdentity == nil || s.developmentIdentity.userAuthorizationEndpoint == nil || connectorID != "uds" {
 +		return nil
++	}
++	generation, err := developmentGrantGeneration(scopes)
++	if err != nil {
++		return err
 +	}
 +	endpoint := *s.developmentIdentity.userAuthorizationEndpoint
 +	query := endpoint.Query()
 +	query.Set("clientId", clientID)
 +	query.Set("userId", userID)
++	if generation != "" {
++		query.Set("clientGeneration", generation)
++	}
 +	endpoint.RawQuery = query.Encode()
 +	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint.String(), nil)
 +	if err != nil {
@@ -762,6 +1042,181 @@ index 0000000..3011e56
 +	if response != nil {
 +		response.Body.Close()
 +	}
++	require.Error(t, err)
++}
+diff --git a/server/development_pkce.go b/server/development_pkce.go
+new file mode 100644
+index 0000000..21dc484
+--- /dev/null
++++ b/server/development_pkce.go
+@@ -0,0 +1,36 @@
++// Copyright 2026 The Dex Authors
++// SPDX-License-Identifier: Apache-2.0
++
++package server
++
++import (
++	"net/url"
++	"regexp"
++
++	"github.com/dexidp/dex/storage"
++)
++
++var developmentS256Challenge = regexp.MustCompile(`^[A-Za-z0-9_-]{43}$`)
++var developmentVerifier = regexp.MustCompile(`^[A-Za-z0-9._~-]{43,128}$`)
++
++func validDevelopmentPKCEAuthorization(values url.Values) bool {
++	return len(values["code_challenge"]) == 1 && len(values["code_challenge_method"]) == 1 &&
++		values.Get("code_challenge_method") == codeChallengeMethodS256 && developmentS256Challenge.MatchString(values.Get("code_challenge")) &&
++		values.Get("response_type") == responseTypeCode
++}
++func validDevelopmentPKCEToken(values url.Values, pkce storage.PKCE) bool {
++	return pkce.CodeChallengeMethod == codeChallengeMethodS256 && developmentS256Challenge.MatchString(pkce.CodeChallenge) &&
++		len(values["code_verifier"]) == 1 && developmentVerifier.MatchString(values.Get("code_verifier"))
++}
++
++// The native public CLI declares an ID-token audience mapper. Keep its access
++// token bound to the CLI itself rather than implicitly widening both tokens.
++func developmentPublicAccessScopes(scopes []string) []string {
++	result := make([]string, 0, len(scopes))
++	for _, scope := range scopes {
++		if _, crossClient := parseCrossClientScope(scope); !crossClient {
++			result = append(result, scope)
++		}
++	}
++	return result
++}
+diff --git a/server/development_pkce_test.go b/server/development_pkce_test.go
+new file mode 100644
+index 0000000..3ca5768
+--- /dev/null
++++ b/server/development_pkce_test.go
+@@ -0,0 +1,127 @@
++// Copyright 2026 The Dex Authors
++// SPDX-License-Identifier: Apache-2.0
++
++package server
++
++import (
++	"crypto/sha256"
++	"encoding/base64"
++	"encoding/json"
++	"net/http"
++	"net/http/httptest"
++	"net/url"
++	"strings"
++	"testing"
++	"time"
++
++	"github.com/coreos/go-oidc/v3/oidc"
++	"github.com/dexidp/dex/storage"
++	"github.com/stretchr/testify/require"
++)
++
++func TestDevelopmentPublicClientRequiresS256AtAuthorization(t *testing.T) {
++	httpServer, s := newTestServer(t, nil)
++	defer httpServer.Close()
++	s.developmentIdentity = &developmentIdentity{}
++	require.NoError(t, s.storage.CreateClient(t.Context(), storage.Client{ID: "cli", Public: true, RedirectURIs: []string{"https://app.example.test/callback"}}))
++	verifier := strings.Repeat("v", 43)
++	hash := sha256.Sum256([]byte(verifier))
++	challenge := base64.RawURLEncoding.EncodeToString(hash[:])
++	for name, extra := range map[string]url.Values{
++		"missing": {}, "plain": {"code_challenge": {verifier}, "code_challenge_method": {"plain"}}, "method-omitted": {"code_challenge": {challenge}}, "short": {"code_challenge": {"short"}, "code_challenge_method": {"S256"}}, "duplicate-method": {"code_challenge": {challenge}, "code_challenge_method": {"S256", "plain"}},
++	} {
++		t.Run(name, func(t *testing.T) {
++			q := url.Values{"client_id": {"cli"}, "response_type": {"code"}, "scope": {"openid"}, "redirect_uri": {"https://app.example.test/callback"}}
++			for key, value := range extra {
++				q[key] = value
++			}
++			_, err := s.parseAuthorizationRequest(httptest.NewRequest(http.MethodGet, httpServer.URL+"/auth?"+q.Encode(), nil))
++			require.Error(t, err)
++		})
++	}
++	q := url.Values{"client_id": {"cli"}, "response_type": {"code"}, "scope": {"openid"}, "redirect_uri": {"https://app.example.test/callback"}, "code_challenge": {challenge}, "code_challenge_method": {"S256"}}
++	auth, err := s.parseAuthorizationRequest(httptest.NewRequest(http.MethodGet, httpServer.URL+"/auth?"+q.Encode(), nil))
++	require.NoError(t, err)
++	require.Equal(t, storage.PKCE{CodeChallenge: challenge, CodeChallengeMethod: "S256"}, auth.PKCE)
++	// Upstream mode remains unchanged without native development identity.
++	s.developmentIdentity = nil
++	q.Del("code_challenge")
++	q.Del("code_challenge_method")
++	_, err = s.parseAuthorizationRequest(httptest.NewRequest(http.MethodGet, httpServer.URL+"/auth?"+q.Encode(), nil))
++	require.NoError(t, err)
++}
++
++func TestDevelopmentPublicTokenRejectsLegacyUnboundAndPlainCodes(t *testing.T) {
++	httpServer, s := newTestServer(t, nil)
++	defer httpServer.Close()
++	s.developmentIdentity = &developmentIdentity{}
++	client := storage.Client{ID: "cli", Public: true, RedirectURIs: []string{"https://app.example.test/callback"}}
++	require.NoError(t, s.storage.CreateClient(t.Context(), client))
++	verifier := strings.Repeat("v", 43)
++	hash := sha256.Sum256([]byte(verifier))
++	challenge := base64.RawURLEncoding.EncodeToString(hash[:])
++	for name, item := range map[string]struct {
++		pkce     storage.PKCE
++		verifier string
++	}{
++		"pre-checkpoint-unbound": {storage.PKCE{}, ""}, "plain": {storage.PKCE{CodeChallenge: verifier, CodeChallengeMethod: "plain"}, verifier}, "missing-verifier": {storage.PKCE{CodeChallenge: challenge, CodeChallengeMethod: "S256"}, ""}, "wrong-verifier": {storage.PKCE{CodeChallenge: challenge, CodeChallengeMethod: "S256"}, strings.Repeat("w", 43)},
++	} {
++		t.Run(name, func(t *testing.T) {
++			code := storage.AuthCode{ID: name, ClientID: "cli", RedirectURI: "https://app.example.test/callback", Expiry: time.Now().Add(time.Minute), PKCE: item.pkce}
++			require.NoError(t, s.storage.CreateAuthCode(t.Context(), code))
++			form := url.Values{"grant_type": {"authorization_code"}, "client_id": {"cli"}, "redirect_uri": {code.RedirectURI}, "code": {name}, "code_verifier": {item.verifier}}
++			request := httptest.NewRequest(http.MethodPost, httpServer.URL+"/token", strings.NewReader(form.Encode()))
++			request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
++			require.NoError(t, request.ParseForm())
++			response := httptest.NewRecorder()
++			s.handleAuthCode(response, request, client)
++			require.Equal(t, 400, response.Code)
++			var errorBody map[string]string
++			require.NoError(t, json.Unmarshal(response.Body.Bytes(), &errorBody))
++			require.Equal(t, errInvalidGrant, errorBody["error"])
++		})
++	}
++}
++
++func TestDevelopmentPublicAudienceIsRealIDTokenOnlyWithStableSubject(t *testing.T) {
++	httpServer, s := newTestServer(t, nil)
++	defer httpServer.Close()
++	s.developmentIdentity = &developmentIdentity{}
++	require.NoError(t, s.storage.CreateClient(t.Context(), storage.Client{ID: "cli", Public: true}))
++	require.NoError(t, s.storage.CreateClient(t.Context(), storage.Client{ID: "server", Secret: "server-secret", TrustedPeers: []string{"cli"}}))
++	claims := storage.Claims{UserID: "real-directory-id", Username: "Owner", PreferredUsername: "owner", Groups: []string{"/UDS Core/Admin"}, Email: "owner@example.test", EmailVerified: true}
++	scopes := []string{scopeOpenID, scopeProfile, scopeEmail, scopeGroups, "audience:server:client_id:server"}
++	idToken, _, err := s.newIDToken(t.Context(), "cli", claims, scopes, "nonce", "", "", "uds")
++	require.NoError(t, err)
++	accessToken, _, err := s.newAccessToken(t.Context(), "cli", claims, scopes, "nonce", "uds")
++	require.NoError(t, err)
++	webToken, _, err := s.newIDToken(t.Context(), "server", claims, scopes[:4], "nonce", "", "", "uds")
++	require.NoError(t, err)
++	verify := func(token, clientID string) *oidc.IDToken {
++		v := oidc.NewVerifier(httpServer.URL, oidc.NewRemoteKeySet(t.Context(), httpServer.URL+"/keys"), &oidc.Config{ClientID: clientID})
++		actual, err := v.Verify(t.Context(), token)
++		require.NoError(t, err)
++		return actual
++	}
++	id := verify(idToken, "server")
++	require.ElementsMatch(t, []string{"cli", "server"}, id.Audience)
++	access := verify(accessToken, "cli")
++	require.Equal(t, []string{"cli"}, access.Audience)
++	require.Equal(t, id.Subject, access.Subject)
++	require.Equal(t, id.Subject, verify(webToken, "server").Subject)
++	var signed struct {
++		AZP      string   `json:"azp"`
++		Name     string   `json:"name"`
++		Username string   `json:"preferred_username"`
++		Groups   []string `json:"groups"`
++	}
++	require.NoError(t, id.Claims(&signed))
++	require.Equal(t, "cli", signed.AZP)
++	require.Equal(t, "Owner", signed.Name)
++	require.Equal(t, "owner", signed.Username)
++	require.Equal(t, claims.Groups, signed.Groups)
++	// Revoking actual stored trust prevents a subsequent signature, including refresh.
++	require.NoError(t, s.storage.UpdateClient(t.Context(), "server", func(client storage.Client) (storage.Client, error) { client.TrustedPeers = nil; return client, nil }))
++	_, _, err = s.newIDToken(t.Context(), "cli", claims, scopes, "nonce", "", "", "uds")
 +	require.Error(t, err)
 +}
 diff --git a/storage/kubernetes/core_client_list_test.go b/storage/kubernetes/core_client_list_test.go

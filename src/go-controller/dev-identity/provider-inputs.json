@@ -6,6 +6,6 @@
   "CGOEnabled": "0",
   "dexRepository": "https://github.com/dexidp/dex.git",
   "dexCommit": "11d2eeb52b42e1980e14cb91e69dd9e3faab2076",
-  "dexPatchSHA256": "9e5cd10730a87b1f7dc974b2882cb0e968d263c07273eacb11dbd3d2dcf4869f",
+  "dexPatchSHA256": "a2e39633c7eeb5b0490039fd45df8c822c614dfa5d2515cf74401b5583dcac78",
   "runtimeBase": "gcr.io/distroless/static-debian13@sha256:e2e927ec666bae08560abb3c55d0659eceabb657f56b6782ab500a9fc7f555e3"
 }

@@ -12,12 +12,24 @@ import (
 )
 
 func (m *Management) UserAllowed(ctx context.Context, clientID string, user User) error {
+	return m.userAllowedGrant(ctx, clientID, user, nil)
+}
+
+func (m *Management) userAllowedGrant(ctx context.Context, clientID string, user User, generation *string) error {
 	if !user.Enabled || (user.Realm != "" && user.Realm != "uds") {
 		return fmt.Errorf("user unavailable")
 	}
 	client, snapshot, err := m.Clients.PublishedClient(ctx, "uds", clientID)
 	if err != nil || !client.Enabled() || client.Data["standardFlowEnabled"] == false {
 		return fmt.Errorf("client unavailable")
+	}
+	if err := m.validatePublishedCorePair(ctx, client); err != nil {
+		return err
+	}
+	if generation != nil {
+		if err := validateGrantGeneration(client, snapshot, *generation); err != nil {
+			return err
+		}
 	}
 	var attributes map[string]string
 	raw, _ := json.Marshal(client.Data["attributes"])
@@ -69,7 +81,8 @@ func (m *Management) UserAuthorization(writer http.ResponseWriter, request *http
 		return
 	}
 	user, err := m.Directory.Get(request.Context(), request.URL.Query().Get("userId"))
-	if err != nil || m.UserAllowed(request.Context(), request.URL.Query().Get("clientId"), user) != nil {
+	generation := request.URL.Query().Get("clientGeneration")
+	if err != nil || m.userAllowedGrant(request.Context(), request.URL.Query().Get("clientId"), user, &generation) != nil {
 		writer.WriteHeader(403)
 		return
 	}

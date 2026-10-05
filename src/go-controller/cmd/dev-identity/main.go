@@ -87,7 +87,11 @@ func restoreClients(ctx context.Context, management *devidentity.Management, han
 			return
 		case <-ticker.C:
 			attempt, cancel := context.WithTimeout(ctx, 10*time.Second)
-			err := management.Clients.Restore(attempt)
+			completed, err := management.Clients.RestoreIfIdle(attempt)
+			if !completed && err == nil {
+				cancel()
+				continue
+			}
 			if err == nil {
 				err = management.PruneExpired(attempt)
 			}
