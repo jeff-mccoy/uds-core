@@ -41,14 +41,7 @@ type Controller struct {
 }
 
 func NewController(ctx context.Context) (*Controller, error) {
-	config, err := rest.InClusterConfig()
-	if err != nil {
-		return nil, fmt.Errorf("Failed to get in-cluster config: %w", err)
-	}
-
-	return &Controller{
-		config: controllerClientConfig(config),
-	}, nil
+	return NewControllerWithOptions(ctx, DefaultRunOptions())
 }
 
 func (c *Controller) Run(ctx context.Context) error {

@@ -14,6 +14,15 @@ export function privateGatewayServices(objects) {
   return gateways;
 }
 
+export function controllerRequestBudgets(controllers) {
+  return controllers.map(controller=>{
+    const container=controller.spec.template.spec.containers.find(c=>c.name==='controller');
+    if(JSON.stringify(container.args)!==JSON.stringify(['--kube-api-qps=100','--kube-api-burst=200']))throw new Error('Native development controller lost its qualified shared request budget');
+    if(container.resources.limits.cpu!=='100m'||container.resources.limits.memory!=='128Mi')throw new Error('Controller resource limits changed without a measured checkpoint');
+    return {qps:100,burst:200,cpu:container.resources.limits.cpu,memory:container.resources.limits.memory};
+  });
+}
+
 export function validateRender(source,identityIncluded) {
   // Original gateway templates repeat the app/istio labels. Match the Helm
   // YAML-to-JSON conversion while preserving the original signed chart bytes.
@@ -23,6 +32,7 @@ export function validateRender(source,identityIncluded) {
   if(runtime.some(o=>o.images.some(i=>/pepr|keycloak:|identity-config:/.test(i))))throw new Error('Excluded legacy runtime remains in native manifests');
   const controllers=objects.filter(o=>o.kind==='Deployment'&&o.metadata.name==='uds-controller');
   if(controllers.length!==4)throw new Error('Expected exactly four native controller installation phases');
+  const controllerBudgets=controllerRequestBudgets(controllers);
   const configs=objects.filter(o=>['MutatingWebhookConfiguration','ValidatingWebhookConfiguration'].includes(o.kind)&&o.metadata.name.startsWith('uds-controller-'));
   if(configs.length!==15)throw new Error('Complete callbacks must occur only in registration, active and narrowed phases');
   const callbacks=configs.reduce((total,config)=>total+config.webhooks.length,0);
@@ -45,5 +55,5 @@ export function validateRender(source,identityIncluded) {
     identityPasswordOnly=true;
     privateGateways=privateGatewayServices(objects);
   }else if(secret||runtime.some(o=>['keycloak','authservice','istio-admin-gateway','istio-tenant-gateway'].includes(o.namespace)))throw new Error('Identity or public gateways leaked into fenced native base');
-  return {objects:objects.length,runtime,controllerPhases:controllers.length,completeCallbackRegistrations:configs.length,completeCallbackEntries:callbacks,nativeBindingsByName:Object.fromEntries([...new Set(bindings.map(o=>o.metadata.name))].map(name=>[name,bindings.filter(o=>o.metadata.name===name).length])),identityPasswordOnly,privateGateways,yamlDuplicateHandling:'Inherited original gateway labels use Helm JSON last-value behavior; signed source templates preserved'};
+  return {objects:objects.length,runtime,controllerPhases:controllers.length,controllerRequestBudgets:controllerBudgets,completeCallbackRegistrations:configs.length,completeCallbackEntries:callbacks,nativeBindingsByName:Object.fromEntries([...new Set(bindings.map(o=>o.metadata.name))].map(name=>[name,bindings.filter(o=>o.metadata.name===name).length])),identityPasswordOnly,privateGateways,yamlDuplicateHandling:'Inherited original gateway labels use Helm JSON last-value behavior; signed source templates preserved'};
 }

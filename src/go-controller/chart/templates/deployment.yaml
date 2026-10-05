@@ -23,6 +23,9 @@ spec:
         - name: controller
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args:
+            - {{ printf "--kube-api-qps=%v" .Values.kubernetesAPI.qps | quote }}
+            - {{ printf "--kube-api-burst=%v" .Values.kubernetesAPI.burst | quote }}
           env:
             - name: POD_NAMESPACE
               valueFrom:

@@ -5,6 +5,7 @@ package main
 
 import (
 	"context"
+	"flag"
 	"github.com/defenseunicorns/uds-core/src/go-controller/internal/controller"
 	"log/slog"
 	"os"
@@ -13,6 +14,11 @@ import (
 )
 
 func main() {
+	options := controller.DefaultRunOptions()
+	qps := flag.Float64("kube-api-qps", float64(options.KubernetesAPIQPS), "Shared Kubernetes API request budget per second (1-200)")
+	flag.IntVar(&options.KubernetesAPIBurst, "kube-api-burst", options.KubernetesAPIBurst, "Shared Kubernetes API request burst (1-400)")
+	flag.Parse()
+	options.KubernetesAPIQPS = float32(*qps)
 	level := slog.LevelInfo
 	switch os.Getenv("UDS_LOG_LEVEL") {
 	case "debug":
@@ -25,7 +31,7 @@ func main() {
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: level})))
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
-	ctrl, err := controller.NewController(ctx)
+	ctrl, err := controller.NewControllerWithOptions(ctx, options)
 	if err == nil {
 		err = ctrl.Run(ctx)
 	}

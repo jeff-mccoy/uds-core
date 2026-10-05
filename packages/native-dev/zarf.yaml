@@ -85,6 +85,7 @@ components:
       - name: uds-controller
         releaseName: uds-controller
         valuesFiles:
+          - values/controller-budget.yaml
           - values/controller-bootstrap.yaml
   - name: uds-controller-registration
     required: true
@@ -96,6 +97,7 @@ components:
         localPath: ../../src/go-controller/chart
         valuesFiles:
           - .build/controller-image.yaml
+          - values/controller-budget.yaml
           - values/controller-registration.yaml
     actions:
       onDeploy:
@@ -141,6 +143,7 @@ components:
         localPath: ../../src/go-controller/chart
         valuesFiles:
           - .build/controller-image.yaml
+          - values/controller-budget.yaml
           - values/controller-active.yaml
     actions:
       onDeploy:
@@ -162,6 +165,7 @@ components:
         localPath: ../../src/go-controller/chart
         valuesFiles:
           - .build/controller-image.yaml
+          - values/controller-budget.yaml
           - values/controller-narrow.yaml
     actions:
       onDeploy:
