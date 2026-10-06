@@ -45,3 +45,6 @@ coverage/**
 src/go-controller/.generated/**
 src/go-controller/build/**
 src/go-controller/**/__pycache__/**
+
+# Standalone development identity build scratch.
+src/dev-identity/**/__pycache__/**
