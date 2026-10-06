@@ -48,3 +48,6 @@ src/go-controller/**/__pycache__/**
 
 # Standalone development identity build scratch.
 src/dev-identity/**/__pycache__/**
+
+# Combined development package output.
+packages/native-dev/.build/**

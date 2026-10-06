@@ -12,6 +12,7 @@ ignore:
   - "dist/**"
   - "build/**"
   - "src/go-controller/.generated/**"
+  - "packages/native-dev/.build/**"
   - "src/pepr/uds-operator-config/templates/**"
   - "src/pepr/uds-exemptions/templates/**"
   - ".codespellrc"
