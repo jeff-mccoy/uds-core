@@ -5,11 +5,12 @@ SPDX-License-Identifier: AGPL-3.0-or-later OR LicenseRef-Defense-Unicorns-Commer
 
 # Native development Core qualification ledger
 
-The integrated experimental development runtime passes its final Core gates.
-Matched measurements show a large process-memory reduction and a slower Package
-lifecycle at the current 100m CPU limit. Private frontend and isolated guest
-qualification are being completed. The fork does not migrate Pepr's TypeScript
-authoring API or qualify advanced production identity.
+This ledger records historical qualification of the combined development runtime
+and new source-split checks. The qualified combined checkpoint remains
+0b2cc45304f783c01d3fc80178867ef350fa95bf. Earlier live results and performance
+measurements apply to their recorded artifacts; they do not automatically
+qualify the relocated modules or newly built bridge image. The sections retain
+the chronology of failures, repairs and completed checks.
 
 ## Pinned reference and artifacts
 
@@ -209,3 +210,53 @@ C10 network-only lifecycle medians are 0.811/1.177/0.820 seconds with the
 measured development latency tradeoff alongside resource savings. It does not
 prove that every native operation is faster. Historical rows above retain their
 original checkpoint and scope.
+
+
+## Independent implementation reviews, October 5
+
+The migration now has separate review boundaries:
+
+- [Native admission and Go lifecycle, PR #3](https://github.com/jeff-mccoy/uds-core/pull/3) retains the original Keycloak provider.
+- [Standalone Dex development identity, PR #2](https://github.com/jeff-mccoy/uds-core/pull/2) defaults to the original Pepr principal and disables paired CLI audiences.
+- [Combined development composition, PR #1](https://github.com/jeff-mccoy/uds-core/pull/1) targets the prerequisite integration branch containing both implementation heads.
+
+The independent native module passes 1,788 race-tested cases across 23 tested
+packages, build and vet, broad and narrow admission renders, 113 pristine
+Keycloak chart assertions, and all 1,092 original Pepr unit tests. Two generation
+passes reproduce all 76 API/client outputs. Original provider files and tests
+remain unchanged on that branch.
+
+Standalone identity passes 147 bridge race cases, including 54 captured Core
+projection/digest cases, 279 patched-Dex race cases, 125 chart assertions and
+60 actual identity/standard values checks. A Git-free export reproduces its
+new bridge and unchanged Dex binaries. Its module imports no controller or
+native-admission code.
+
+The combined recipe hashes both modules separately as well as the complete
+composition. It explicitly enables paired CLI authority with the exact native
+controller principal and supplies the chosen image in every controller phase.
+Its identity input lock now records the new bridge binary and separate OCI
+index, AMD64 manifest and configuration digests. Historical C12 receipts remain
+unchanged. New source checks do not establish fresh live Go/Keycloak or
+Pepr/Dex parity, nor a new combined live, performance or density result.
+
+Use the [standalone identity guide](development-identity.md) for provider
+configuration and the [native controller guide](../../src/go-controller/README.md)
+for admission/reconciliation ownership. Their individual rollout gates remain
+explicit.
+
+
+## New composition source checks
+
+The split composition passes 20 unit assertions, including negative authority
+and RBAC cases, and 130 bootstrap helper race cases with the actual trusted UDS
+executable. Its fresh complete render contains 257 objects, four controller
+phases with one selected image, 27 callbacks, explicit paired authority and
+exact bound-controller RBAC. Preparation now reuses the original non-runtime
+Pepr component declarations without requiring an unused Pepr runtime build.
+
+The new controller build matches the qualified C12 binary hash. The bridge has
+new separately recorded bytes. Rendering did not request signed input-package
+verification, create a new package or install a cluster. Missing tool/module
+context attempts remain in the local receipt directory; corrected source checks
+are separate from those failures and from the historical live qualification.

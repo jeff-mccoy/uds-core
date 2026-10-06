@@ -4,7 +4,7 @@ kind: ZarfPackageConfig
 metadata:
   name: uds-core-controller
   version: 0.1.0-native-dev
-  description: Native Go backend bootstrap; activate through core-native-dev readiness gates
+  description: Native Go backend bootstrap; requires explicitly qualified native admission activation
 components:
   - name: uds-controller
     required: true
@@ -16,7 +16,6 @@ components:
         localPath: chart
         valuesFiles:
           - packaging-values.yaml
-          - ../../packages/native-dev/.build/controller-image.yaml
         values:
           - sourcePath: .uds-controller.uds-controller
             targetPath: .

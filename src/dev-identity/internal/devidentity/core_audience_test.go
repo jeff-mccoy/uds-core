@@ -13,19 +13,17 @@ import (
 	"strings"
 	"testing"
 
-	uds "github.com/defenseunicorns/uds-core/src/go-controller/api/uds/v1alpha1"
-	ssoclient "github.com/defenseunicorns/uds-core/src/go-controller/internal/controller/sso"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/utils/ptr"
 )
 
 type packageFixture struct {
-	pkg *uds.UDSPackage
+	pkg *CorePackage
 	err error
 }
 
-func (f *packageFixture) GetCorePackage(ctx context.Context, namespace, name string) (*uds.UDSPackage, error) {
+func (f *packageFixture) GetCorePackage(ctx context.Context, namespace, name string) (*CorePackage, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -37,22 +35,22 @@ func (f *packageFixture) GetCorePackage(ctx context.Context, namespace, name str
 	}
 	return f.pkg.DeepCopy(), nil
 }
-func audiencePackage() *uds.UDSPackage {
-	return &uds.UDSPackage{ObjectMeta: metav1.ObjectMeta{Namespace: "ark", Name: "ark", UID: types.UID("real-package-uid")}, Spec: uds.Spec{Sso: []uds.Sso{
+func audiencePackage() *CorePackage {
+	return &CorePackage{ObjectMeta: metav1.ObjectMeta{Namespace: "ark", Name: "ark", UID: types.UID("real-package-uid")}, Spec: CorePackageSpec{Sso: []Sso{
 		{ClientID: "ark-server", Name: "Ark", EnableAuthserviceSelector: map[string]string{"app": "ark"}, StandardFlowEnabled: ptr.To(true), PublicClient: ptr.To(false), FullScopeAllowed: ptr.To(false), RedirectUris: []string{"https://ark.example.test/login"}},
-		{ClientID: "ark-cli", Name: "Ark CLI", StandardFlowEnabled: ptr.To(true), PublicClient: ptr.To(true), FullScopeAllowed: ptr.To(false), RedirectUris: []string{"http://localhost:8000"}, Attributes: map[string]string{"pkce.code.challenge.method": "S256"}, ProtocolMappers: []uds.ProtocolMapper{{Name: "ark-audience", Protocol: uds.Protocol("openid-connect"), ProtocolMapper: "oidc-audience-mapper", Config: map[string]string{"included.client.audience": "ark-server", "id.token.claim": "true", "access.token.claim": "false"}}}},
+		{ClientID: "ark-cli", Name: "Ark CLI", StandardFlowEnabled: ptr.To(true), PublicClient: ptr.To(true), FullScopeAllowed: ptr.To(false), RedirectUris: []string{"http://localhost:8000"}, Attributes: map[string]string{"pkce.code.challenge.method": "S256"}, ProtocolMappers: []ProtocolMapper{{Name: "ark-audience", Protocol: Protocol("openid-connect"), ProtocolMapper: "oidc-audience-mapper", Config: map[string]string{"included.client.audience": "ark-server", "id.token.claim": "true", "access.token.claim": "false"}}}},
 	}}}
 }
-func ownedClient(pkg *uds.UDSPackage, index int) ClientRecord {
+func ownedClient(pkg *CorePackage, index int) ClientRecord {
 	spec := pkg.Spec.Sso[index]
-	data := ssoclient.CanonicalClientProjection(spec)
+	data := CanonicalClientProjection(spec)
 	data["id"] = spec.ClientID
 	if !ptr.Deref(spec.PublicClient, false) {
 		data["secret"] = "generated-real-secret"
 	}
 	attrs := data["attributes"].(map[string]any)
-	for key, value := range map[string]string{"namespace": pkg.Namespace, "name": pkg.Name, "uid": string(pkg.UID), "spec-sha256": ssoclient.CoreClientSpecDigest(spec)} {
-		attrs[ssoclient.CoreOwnerPrefix+key] = value
+	for key, value := range map[string]string{"namespace": pkg.Namespace, "name": pkg.Name, "uid": string(pkg.UID), "spec-sha256": CoreClientSpecDigest(spec)} {
+		attrs[CoreOwnerPrefix+key] = value
 	}
 	_ = validateClient(data)
 	return ClientRecord{Realm: "uds", Data: data}
@@ -62,6 +60,7 @@ func pairedManagement(t *testing.T) (*Management, *packageFixture, *testDex, *te
 	m, _, public, admin := managementFixture(t)
 	source := &packageFixture{pkg: audiencePackage()}
 	m.Clients.Packages = source
+	m.Clients.CoreAudiencePairsEnabled = true
 	for index := range source.pkg.Spec.Sso {
 		client := ownedClient(source.pkg, index)
 		if err := m.authenticateCoreOwner(t.Context(), Principal{Role: "operator", Subject: "uds-operator"}, &client); err != nil {
@@ -93,6 +92,7 @@ func TestCoreAudienceReservedProvenanceCannotBeForged(t *testing.T) {
 		t.Run(role, func(t *testing.T) {
 			m, _, _, _ := managementFixture(t)
 			m.Clients.Packages = &packageFixture{pkg: audiencePackage()}
+			m.Clients.CoreAudiencePairsEnabled = true
 			client := ownedClient(audiencePackage(), 1)
 			if err := m.authenticateCoreOwner(t.Context(), Principal{Role: role, Subject: "same-user-controlled-subject"}, &client); err == nil {
 				t.Fatal("reserved attrs created operator authority")
@@ -145,6 +145,7 @@ func TestCoreAudienceRejectsChangedAndUnsupportedAuthority(t *testing.T) {
 			m, _, _, _ := managementFixture(t)
 			f := &packageFixture{pkg: audiencePackage()}
 			m.Clients.Packages = f
+			m.Clients.CoreAudiencePairsEnabled = true
 			client := ownedClient(f.pkg, 1)
 			change(f, &client)
 			if err := m.authenticateCoreOwner(t.Context(), Principal{Role: "operator", Subject: "uds-operator"}, &client); err == nil {
@@ -173,6 +174,7 @@ func TestCoreAudienceManagementCollectionRequiresRealOperatorToken(t *testing.T)
 	m, _, _, _ := managementFixture(t)
 	f := &packageFixture{pkg: audiencePackage()}
 	m.Clients.Packages = f
+	m.Clients.CoreAudiencePairsEnabled = true
 	adm, code := adminToken(t, m, "admin", "real-admin-password")
 	if code != 200 {
 		t.Fatal(code)
@@ -224,6 +226,7 @@ func TestCoreAudienceRevocationFencesBothIssuersWithoutUnrelatedOutage(t *testin
 	}
 	replacement := NewReplicatedClients(m.Store, public, failing)
 	replacement.Packages = source
+	replacement.CoreAudiencePairsEnabled = true
 	m.Clients = replacement
 	if err := m.checkPKCEToken(t.Context(), tokenRequest("ark-cli", "refresh_token", nil)); err == nil {
 		t.Fatal("restart discarded audience revocation fence")
@@ -248,6 +251,7 @@ func TestCoreAudienceRestoreRevokesDeletedPackageWithoutGlobalFence(t *testing.T
 	source.pkg = nil
 	replacement := NewReplicatedClients(m.Store, public, admin)
 	replacement.Packages = source
+	replacement.CoreAudiencePairsEnabled = true
 	m.Clients = replacement
 	if err := replacement.Restore(t.Context()); err != nil {
 		t.Fatal("stale provenance prevented safe restoration", err)

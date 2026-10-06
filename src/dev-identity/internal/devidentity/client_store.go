@@ -67,8 +67,10 @@ func stringsField(fields map[string]any, key string) []string {
 type Clients struct {
 	store    StateStore
 	Packages CorePackageSource
-	dex      []DexClients
-	mu       sync.Mutex
+	// Enable only with an authenticated operator that emits the verified pair contract.
+	CoreAudiencePairsEnabled bool
+	dex                      []DexClients
+	mu                       sync.Mutex
 }
 
 func NewClients(store StateStore, dex DexClients) *Clients { return NewReplicatedClients(store, dex) }

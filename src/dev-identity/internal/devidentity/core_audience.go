@@ -11,8 +11,6 @@ import (
 	"slices"
 	"strings"
 
-	uds "github.com/defenseunicorns/uds-core/src/go-controller/api/uds/v1alpha1"
-	ssoclient "github.com/defenseunicorns/uds-core/src/go-controller/internal/controller/sso"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -21,19 +19,19 @@ import (
 )
 
 type CorePackageSource interface {
-	GetCorePackage(context.Context, string, string) (*uds.UDSPackage, error)
+	GetCorePackage(context.Context, string, string) (*CorePackage, error)
 }
 type KubeCorePackages struct{ Client dynamic.Interface }
 
-func (k KubeCorePackages) GetCorePackage(ctx context.Context, namespace, name string) (*uds.UDSPackage, error) {
+func (k KubeCorePackages) GetCorePackage(ctx context.Context, namespace, name string) (*CorePackage, error) {
 	if k.Client == nil {
 		return nil, fmt.Errorf("Core package reader unavailable")
 	}
-	object, err := k.Client.Resource(schema.GroupVersionResource{Group: "uds.dev", Version: "v1alpha1", Resource: "packages"}).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
+	object, err := k.Client.Resource(schema.GroupVersionResource{Group: "dev", Version: "v1alpha1", Resource: "packages"}).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
 	if err != nil {
 		return nil, err
 	}
-	var result uds.UDSPackage
+	var result CorePackage
 	if err := runtime.DefaultUnstructuredConverter.FromUnstructured(object.Object, &result); err != nil {
 		return nil, err
 	}
@@ -73,7 +71,7 @@ func (m *Management) authenticateCoreOwner(ctx context.Context, principal Princi
 	attrs := clientAttributes(*record)
 	reserved := false
 	for key := range attrs {
-		reserved = reserved || strings.HasPrefix(key, ssoclient.CoreOwnerPrefix)
+		reserved = reserved || strings.HasPrefix(key, CoreOwnerPrefix)
 	}
 	if !reserved {
 		record.CoreOwner = nil
@@ -82,16 +80,22 @@ func (m *Management) authenticateCoreOwner(ctx context.Context, principal Princi
 		}
 		return nil
 	}
+	if !m.Clients.CoreAudiencePairsEnabled {
+		return fmt.Errorf("Core audience pairing is disabled without a verified provenance producer")
+	}
 	if principal.Role != "operator" || principal.Subject == "" {
 		return fmt.Errorf("reserved Core provenance requires authenticated operator")
 	}
-	owner := &CoreClientOwner{Namespace: attrs[ssoclient.CoreOwnerPrefix+"namespace"], Package: attrs[ssoclient.CoreOwnerPrefix+"name"], UID: attrs[ssoclient.CoreOwnerPrefix+"uid"], SpecSHA256: attrs[ssoclient.CoreOwnerPrefix+"spec-sha256"]}
+	owner := &CoreClientOwner{Namespace: attrs[CoreOwnerPrefix+"namespace"], Package: attrs[CoreOwnerPrefix+"name"], UID: attrs[CoreOwnerPrefix+"uid"], SpecSHA256: attrs[CoreOwnerPrefix+"spec-sha256"]}
 	record.CoreOwner = owner
 	return m.Clients.validateCoreRecord(ctx, *record)
 }
 
 func (c *Clients) validateCoreRecord(ctx context.Context, record ClientRecord) error {
 	owner := record.CoreOwner
+	if owner != nil && !c.CoreAudiencePairsEnabled {
+		return fmt.Errorf("Core audience pairing is disabled")
+	}
 	if owner == nil {
 		if len(publicAudienceTargets(record.Data)) != 0 {
 			return fmt.Errorf("unauthenticated audience provenance")
@@ -105,7 +109,7 @@ func (c *Clients) validateCoreRecord(ctx context.Context, record ClientRecord) e
 	if err != nil || pkg == nil || pkg.Namespace != owner.Namespace || pkg.Name != owner.Package || string(pkg.UID) != owner.UID || pkg.DeletionTimestamp != nil {
 		return fmt.Errorf("Core package authority changed")
 	}
-	var found *uds.Sso
+	var found *Sso
 	for i := range pkg.Spec.Sso {
 		if pkg.Spec.Sso[i].ClientID == record.ClientID() {
 			if found != nil {
@@ -114,10 +118,10 @@ func (c *Clients) validateCoreRecord(ctx context.Context, record ClientRecord) e
 			found = &pkg.Spec.Sso[i]
 		}
 	}
-	if found == nil || ssoclient.CoreClientSpecDigest(*found) != owner.SpecSHA256 {
+	if found == nil || CoreClientSpecDigest(*found) != owner.SpecSHA256 {
 		return fmt.Errorf("Core client specification changed")
 	}
-	expected := ssoclient.CanonicalClientProjection(*found)
+	expected := CanonicalClientProjection(*found)
 	// Management's documented omitted-value defaults are the same ones used
 	// for an ordinary client. Generated id/secret are never pairing authority.
 	for key, value := range map[string]any{"protocol": "openid-connect", "enabled": true, "publicClient": false, "standardFlowEnabled": true} {
@@ -131,7 +135,7 @@ func (c *Clients) validateCoreRecord(ctx context.Context, record ClientRecord) e
 	}
 	attributes := clientAttributes(record)
 	for key := range attributes {
-		if strings.HasPrefix(key, ssoclient.CoreOwnerPrefix) {
+		if strings.HasPrefix(key, CoreOwnerPrefix) {
 			delete(attributes, key)
 		}
 	}

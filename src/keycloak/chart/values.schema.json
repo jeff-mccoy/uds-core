@@ -873,6 +873,10 @@
           "enum": [
             "password-only"
           ]
+        },
+        "coreAudiencePairsEnabled": {
+          "type": "boolean",
+          "description": "Enable only with a verified Core operator provenance producer; original Pepr pairing is unsupported."
         }
       }
     }

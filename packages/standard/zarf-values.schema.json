@@ -4254,6 +4254,9 @@
                   "minLength": 1,
                   "type": "string"
                 },
+                "coreAudiencePairsEnabled": {
+                  "type": "boolean"
+                },
                 "dexImage": {
                   "minLength": 1,
                   "type": "string"

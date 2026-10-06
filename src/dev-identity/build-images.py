@@ -16,7 +16,7 @@ import time
 from urllib.parse import urlsplit
 
 HERE = Path(__file__).resolve().parent
-MODULE = HERE.parent
+MODULE = HERE
 
 
 def digest(path):

@@ -81,3 +81,42 @@ func TestProjectedNativeControllerTokenGetsOnlyOperatorAuthority(t *testing.T) {
 		t.Fatal("operator assertion obtained master authority")
 	}
 }
+
+func TestOriginalPeprOperatorRequiresExactReviewedAndBoundIdentity(t *testing.T) {
+	client := fake.NewSimpleClientset(
+		&corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{Name: "pepr-uds-core", Namespace: "pepr-system", UID: "pepr-sa"}},
+		&corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "pepr-uds-core-watcher", Namespace: "pepr-system", UID: "pepr-pod"}},
+	)
+	authority := &KubeAuthority{Core: client.CoreV1(), Auth: client.AuthenticationV1(), FleetAudience: "http://keycloak-http.keycloak.svc.cluster.local/realms/uds", OperatorNamespace: "pepr-system", OperatorServiceAccount: "pepr-uds-core"}
+	status := authv1.TokenReviewStatus{Authenticated: true, Audiences: []string{authority.FleetAudience}, User: authv1.UserInfo{Username: "system:serviceaccount:pepr-system:pepr-uds-core", UID: "pepr-sa", Extra: map[string]authv1.ExtraValue{"authentication.kubernetes.io/pod-name": {"pepr-uds-core-watcher"}, "authentication.kubernetes.io/pod-uid": {"pepr-pod"}}}}
+	client.PrependReactor("create", "tokenreviews", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		reviewed := action.(k8stesting.CreateAction).GetObject().(*authv1.TokenReview)
+		if reviewed.Spec.Token != "pepr-projected-token" || len(reviewed.Spec.Audiences) != 1 || reviewed.Spec.Audiences[0] != authority.FleetAudience {
+			t.Fatal("original Pepr audience contract changed")
+		}
+		return true, &authv1.TokenReview{Status: status}, nil
+	})
+	principal, err := authority.Assertion(t.Context(), "pepr-projected-token")
+	if err != nil || principal.Role != "operator" {
+		t.Fatal(principal, err)
+	}
+	if clientPermitted(principal, ClientRecord{Realm: "master", Data: map[string]any{"clientId": "ordinary"}}) {
+		t.Fatal("Pepr token acquired master authority")
+	}
+	status.User.Username = "system:serviceaccount:pepr-system:foreign"
+	if _, err := authority.Assertion(t.Context(), "pepr-projected-token"); err == nil {
+		t.Fatal("foreign account authorized")
+	}
+	status.User.Username = "system:serviceaccount:pepr-system:pepr-uds-core"
+	status.User.UID = "replacement-sa"
+	if _, err := authority.Assertion(t.Context(), "pepr-projected-token"); err == nil {
+		t.Fatal("replacement account authorized")
+	}
+	status.User.UID = "pepr-sa"
+	if err := client.CoreV1().Pods("pepr-system").Delete(t.Context(), "pepr-uds-core-watcher", metav1.DeleteOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := authority.Validate(t.Context(), principal); err == nil {
+		t.Fatal("deleted bound watcher retained management authority")
+	}
+}

@@ -5,6 +5,9 @@ SPDX-License-Identifier: AGPL-3.0-or-later OR LicenseRef-Defense-Unicorns-Commer
 password fixture. Never accept required production auth settings it cannot
 enforce, even when unused Keycloak values remain in the surrounding chart. */}}
 {{- define "keycloak.nativeIdentity.authenticationGuard" -}}
+{{- if and .Values.nativeIdentity.coreAudiencePairsEnabled (eq .Values.nativeIdentity.controllerNamespace "pepr-system") (eq .Values.nativeIdentity.controllerServiceAccount "pepr-uds-core") -}}
+{{- fail "paired CLI audiences require a verified provenance producer; the original Pepr provider does not supply it" -}}
+{{- end -}}
 {{- if ne .Values.nativeIdentity.authenticationProfile "password-only" -}}
 {{- fail "Native identity supports only the explicit password-only development profile" -}}
 {{- end -}}

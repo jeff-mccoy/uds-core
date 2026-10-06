@@ -13,7 +13,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/defenseunicorns/uds-core/src/go-controller/internal/devidentity"
+	"github.com/defenseunicorns/uds-core/src/dev-identity/internal/devidentity"
 	api "github.com/dexidp/dex/api/v2"
 	"github.com/google/uuid"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -90,6 +90,7 @@ func initialize(ctx context.Context, cfg configuration) (*hostRouter, *devidenti
 		return nil, nil, closeAPIs, err
 	}
 	clients.Packages = devidentity.KubeCorePackages{Client: packageClient}
+	clients.CoreAudiencePairsEnabled = cfg.CoreAudiencePairsEnabled
 	public, err := makeBridge(directory, cfg, cfg.DexUpstream, cfg.PublicHost)
 	if err != nil {
 		return nil, nil, closeAPIs, err

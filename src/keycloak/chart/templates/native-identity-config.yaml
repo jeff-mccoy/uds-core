@@ -18,6 +18,7 @@ stringData:
       "adminHost": {{ $adminHost | toJson }},
       "issuerPath": "/realms/uds",
       "passwordOnly": true,
+      "coreAudiencePairsEnabled": {{ .Values.nativeIdentity.coreAudiencePairsEnabled | toJson }},
       "dexUpstream": "https://localhost:5556",
       "adminDexUpstream": "https://localhost:6556",
       "dexRootCA": "/tls/ca.crt",

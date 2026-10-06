@@ -38,13 +38,14 @@ for(const [name,directory] of [['HELM_CACHE_HOME','helm-cache'],['HELM_CONFIG_HO
 }
 
 function walk(dir,files=[]){for(const entry of fs.readdirSync(dir,{withFileTypes:true})){if(['node_modules','.git','.build','build','vendor','__pycache__'].includes(entry.name))continue;const name=path.join(dir,entry.name);if(entry.isDirectory())walk(name,files);else files.push(name);}return files;}
-function sourceHashes(){const files={};for(const directory of ['src/go-controller','src/pepr','src/istio','src/keycloak','src/authservice','src/prometheus-stack','packages/base','packages/identity-authorization','packages/native-dev'])for(const name of walk(path.join(root,directory)))files[path.relative(root,name)]=sha(fs.readFileSync(name));for(const name of ['docs/dev/native-development-identity.md']){const filename=path.join(root,name);if(fs.existsSync(filename))files[name]=sha(fs.readFileSync(filename));}return files;}
+function sourceHashes(){const files={};for(const directory of ['src/go-controller','src/dev-identity','src/pepr','src/istio','src/keycloak','src/authservice','src/prometheus-stack','packages/base','packages/identity-authorization','packages/native-dev'])for(const name of walk(path.join(root,directory)))files[path.relative(root,name)]=sha(fs.readFileSync(name));for(const name of ['docs/dev/development-identity.md']){const filename=path.join(root,name);if(fs.existsSync(filename))files[name]=sha(fs.readFileSync(filename));}return files;}
 const sourceFiles=sourceHashes();
 const commit=run('git',['rev-parse','HEAD']).trim();
 try{run('git',['merge-base','--is-ancestor',inputs.core.sourceCommit,commit]);}
 catch{throw new Error('Native recipe requires its pinned Core source commit in the checkout history');}
 const sourceSHA=sha(JSON.stringify(Object.entries(sourceFiles).sort(([a],[b])=>a.localeCompare(b))));
 const lock={...inputs,architecture:arch,sourceGitHEAD:commit,sourceSHA256:sourceSHA,sourceFiles,removedImportActions:[],createdAt:null};
+lock.componentSourceSHA256=Object.fromEntries([['controller','src/go-controller/'],['identity','src/dev-identity/'],['composition','packages/native-dev/']].map(([name,prefix])=>[name,sha(JSON.stringify(Object.entries(sourceFiles).filter(([filename])=>filename.startsWith(prefix)).sort(([a],[b])=>a.localeCompare(b))))]));
 lock.tenantActivationEnabled=!baseOnly&&!args.includes('--candidate');
 lock.connectedOnly=connected;
 lock.zarfCreateEnvironment={DOCKER_API_VERSION:inputs.zarfDockerAPIVersion};
@@ -101,7 +102,8 @@ const nativeValues=path.join(pkg,'values/identity-password-only.yaml');
 provider.charts.find(c=>c.name==='keycloak').valuesFiles ||= [];
 provider.charts.find(c=>c.name==='keycloak').valuesFiles.push(path.relative(path.join(root,'src/keycloak'),nativeValues));
 overlay('identity',identity,[provider],path.join(root,'src/keycloak'));
-const pepr=composed('src/pepr');
+// Reuse the original non-runtime component declarations without requiring an unused Pepr dist build.
+const pepr=yaml.load(fs.readFileSync(path.join(root,'src/pepr/zarf.yaml'),'utf8'));
 const operator=pepr.components.find(c=>c.name==='uds-operator-config');
 const operatorChart=operator.charts.find(c=>c.name==='uds-operator-config');
 const chartSource=path.join(root,'src/pepr/uds-operator-config');

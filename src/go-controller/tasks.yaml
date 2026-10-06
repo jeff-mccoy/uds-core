@@ -12,7 +12,7 @@ tasks:
     description: "generate crd definition files, deepcopy and clients"
     actions:
       - description: "generate clients and deepcopy"
-        cmd: ./hack/update-codegen.sh
+        cmd: src/go-controller/hack/update-codegen.sh
 
   - name: validate
     actions:
@@ -33,13 +33,9 @@ tasks:
           uds zarf tools kubectl rollout restart deployment/pepr-uds-core-watcher -n pepr-system
           uds zarf tools kubectl rollout status deployment/pepr-uds-core-watcher -n pepr-system
 
-  - name: build-native-package
-    description: Build pinned static native binaries and the complete development package
+  - name: build-controller
+    description: Build the standalone Go controller without changing identity or deploying a cluster
     actions:
-      - cmd: node packages/native-dev/prepare.mjs --package
-
-  - name: update-controller
-    description: Prepare the native development artifacts before an explicit isolated-cluster rollout
-    actions:
-      - description: Build content-addressed native controller image and record source/binary inputs
-        cmd: node packages/native-dev/prepare.mjs
+      - cmd: |
+          cd src/go-controller
+          GOWORK=off CGO_ENABLED=0 go build -buildvcs=false -trimpath -ldflags='-s -w' -o build/uds-controller .

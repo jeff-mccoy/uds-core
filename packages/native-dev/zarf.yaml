@@ -85,6 +85,7 @@ components:
       - name: uds-controller
         releaseName: uds-controller
         valuesFiles:
+          - .build/controller-image.yaml
           - values/controller-budget.yaml
           - values/controller-bootstrap.yaml
   - name: uds-controller-registration

@@ -13,7 +13,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/defenseunicorns/uds-core/src/go-controller/internal/devidentity"
+	"github.com/defenseunicorns/uds-core/src/dev-identity/internal/devidentity"
 )
 
 func main() {

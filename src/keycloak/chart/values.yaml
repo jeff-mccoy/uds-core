@@ -14,12 +14,14 @@ image:
 nativeIdentity:
   enabled: false
   authenticationProfile: password-only
-  bridgeImage: "ark-core-native-identity:20261003-id17"
-  dexImage: "ark-core-native-dex:20261003-id7"
+  # Existing Pepr clients do not emit the paired-CLI provenance contract.
+  coreAudiencePairsEnabled: false
+  bridgeImage: "uds-core-dev-identity:standalone"
+  dexImage: "uds-core-dev-dex:standalone"
   imagePullPolicy: IfNotPresent
   tlsSecret: uds-native-identity-tls
-  controllerNamespace: uds-system
-  controllerServiceAccount: uds-controller
+  controllerNamespace: pepr-system
+  controllerServiceAccount: pepr-uds-core
   publicStorageNamespace: keycloak-dex-public
   adminStorageNamespace: keycloak-dex-admin
   fleetNamespace: uds-fleet-command
