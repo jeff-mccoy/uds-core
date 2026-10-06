@@ -1,0 +1,56 @@
+# Copyright 2026 Defense Unicorns
+# SPDX-License-Identifier: AGPL-3.0-or-later OR LicenseRef-Defense-Unicorns-Commercial
+
+suite: Standalone development identity Pepr boundary
+templates:
+  - native-identity-controller-role.yaml
+  - native-identity-config.yaml
+  - native-identity-statefulset.yaml
+set:
+  devMode: true
+  realmAuthFlows.OTP_ENABLED: false
+  realmAuthFlows.X509_AUTH_ENABLED: false
+  realmAuthFlows.SOCIAL_AUTH_ENABLED: false
+  realmAuthFlows.WEBAUTHN_ENABLED: false
+  realmAuthFlows.X509_MFA_ENABLED: false
+tests:
+  - it: authorizes the original Pepr account without the Go operator
+    template: native-identity-controller-role.yaml
+    set:
+      nativeIdentity.enabled: true
+    asserts:
+      - equal:
+          path: metadata.namespace
+          value: pepr-system
+        documentIndex: 0
+      - equal:
+          path: rules[0].resourceNames
+          value: [pepr-uds-core]
+        documentIndex: 0
+      - equal:
+          path: rules[1].verbs
+          value: [get]
+        documentIndex: 0
+  - it: renders pairing disabled for the original Pepr identity
+    template: native-identity-config.yaml
+    set:
+      nativeIdentity.enabled: true
+    asserts:
+      - matchRegex:
+          path: stringData["bridge.json"]
+          pattern: '"coreAudiencePairsEnabled": false'
+      - matchRegex:
+          path: stringData["bridge.json"]
+          pattern: '"operatorNamespace": "pepr-system"'
+      - matchRegex:
+          path: stringData["bridge.json"]
+          pattern: '"operatorServiceAccount": "pepr-uds-core"'
+  - it: rejects paired CLI enablement without a provenance producer
+    template: native-identity-statefulset.yaml
+    set:
+      nativeIdentity.enabled: true
+      nativeIdentity.coreAudiencePairsEnabled: true
+      devMode: true
+    asserts:
+      - failedTemplate:
+          errorMessage: paired CLI audiences require a verified provenance producer; the original Pepr provider does not supply it
